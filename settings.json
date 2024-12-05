@@ -1,0 +1,37 @@
+{
+    "SeeDocsAt": "",
+    "SettingsVersion": 1.2,
+    "SimMode": "Multirotor",
+    "ClockSpeed": 1,
+    "Vehicles": {
+        "1": {
+            "VehicleType": "SimpleFlight"
+        }
+    },
+    "UnityData": {
+        "time": 0.0,
+        "center": [
+            7.65,
+            5.0,
+            7.16
+        ],
+        "taskId": 1,
+        "drones": {
+            "1": {
+                "startCoordinate": [
+                    0.0,
+                    0.0,
+                    0.0
+                ]
+            }
+        },
+        "task": "",
+        "dataSaveDir": "",
+        "idMapping": {
+            "1": "1"
+        },
+        "httpPositionSyncUrl": "",
+        "tcpSyncUrl": "127.0.0.1",
+        "tcpSyncPort": 8811
+    }
+}
