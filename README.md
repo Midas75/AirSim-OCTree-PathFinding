@@ -1,5 +1,7 @@
 # 基于八叉树的无人机寻路算法
-<iframe src="//player.bilibili.com/player.html?isOutside=true&aid=113597824895460&bvid=BV1hmi9YTEy7&cid=27186299104&p=1" scrolling="no" border="0" frameborder="no" framespacing="0" allowfullscreen="true"></iframe>
+👇点击图片可以看演示视频
+[![演示视频](figures/cover.png)](https://www.bilibili.com/video/BV1hmi9YTEy7)
+
 
 ## 前置条件
 1. NVIDIA显卡
