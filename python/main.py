@@ -50,9 +50,10 @@ def flyTo(
     target: tuple[float, float, float],
     pg: PathGraph,
     dt: float = 0.1,
-    velocity: float = 7,
+    velocity: float = 10,
     accept_distance: float = 4,
 ) -> tuple[bool, bool]:
+    result = True
     att = dr.getAttitude(1)
     current_forward = fusion_detection.getForward((att.rx, att.ry, att.rz, att.rw))
     current_forward = fusion_detection.normalize(
@@ -91,26 +92,20 @@ def flyTo(
     if current_node.state != root.empty:
         current_node.clear()
     if target_node.state != root.empty:
+        result = False
         print(f"cannot fly to {target} because it is not empty:{target_node.center}")
-        print("updating...", end="")
-        start = time.time() * 1000
-        pg.update(root)
-        print(f"update cost {time.time()*1000-start:.2f}ms")
-        return False, False
     real_target_node = root.query(real_target)
     if real_target_node.state != root.empty:
+        result = False
         print(
             f"cannot fly to {target} by {real_target_node.center,real_target_node.state == root.empty}"
         )
         real_target_node.clear()
-        print("updating...", end="")
-        start = time.time() * 1000
-        pg.update(root)
-        print(f"update cost {time.time()*1000-start:.2f}ms")
-        return False, False
     # print(f"moving to {real_target} distance: {distance}")
     if abs(yaw_offset) > 30:
         real_velocity = 0
+    if not result:
+        real_velocity = -real_velocity/2
     f = ac.moveByVelocityAsync(  # z x -y
         direction[2] * real_velocity,
         direction[0] * real_velocity,
@@ -119,10 +114,16 @@ def flyTo(
         drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
         yaw_mode=airsim.YawMode(True, yaw_offset),
     )
+    if not result:
+        print("updating...", end="")
+        start = time.time() * 1000
+        pg.update(root)
+        print(f"update cost {time.time()*1000-start:.2f}ms")
+        return False, False
     # pg.update(root)
     f.join()
     return (
-        True,
+        result,
         fusion_detection.getV3Distance(dr.getAttitude(1).getPosition(), target)
         < accept_distance,
     )
@@ -155,7 +156,7 @@ if __name__ == "__main__":
     root.query(target).divide(4)
     pg.update(root)
     f: Future = None
-    position = dr.getAttitude(1).getPosition()
+    start = position = dr.getAttitude(1).getPosition()
     path = getPath(root, pg, position, target)
     currentIndex = 1
     while True:
@@ -180,5 +181,8 @@ if __name__ == "__main__":
                 fusion_detection.renderPointCloud(
                     all_points + all_paths, all_colors + all_path_colors
                 )
-                root.render(show_now=True)
+                root.render(
+                    with_path=pg.get_path(root.query(start), root.query(target)),
+                    show_now=True,
+                )
                 break
