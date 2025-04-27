@@ -35,9 +35,9 @@ class PathNode:
         self.edges = set[PathEdge]()
 
     def distance(self, other: PathNode) -> float:
-        rangel = range(len(self.tree_node.center))
         v = [
-            (self.tree_node.center[i] - other.tree_node.center[i]) ** 2 for i in rangel
+            (self.tree_node.center[i] - other.tree_node.center[i]) ** 2
+            for i in self.tree_node.rangel
         ]
         return math.sqrt(sum(v))
 
@@ -245,6 +245,7 @@ class TreeNode:
     half_full: int = 2
     child: dict[int, TreeNode]
     state: int
+    bit_value: list[int]
     bound: list[tuple[float, ...]]
     bound_min: tuple[float, ...]
     bound_max: tuple[float, ...]
@@ -253,6 +254,7 @@ class TreeNode:
     min_length: tuple[float, ...]
     parent: TreeNode
     _min: bool
+    inf: float = float("inf")
 
     def __init__(self, min_length: tuple[float, ...]) -> None:
         self.state = self.empty
@@ -262,12 +264,13 @@ class TreeNode:
     def clear(self) -> None:
         self.child.clear()
         self.state = self.empty
-        parent =self.parent
+        parent = self.parent
         while True:
             if parent is None:
                 break
             parent.update_state()
             parent = parent.parent
+
     def query(
         self, point: tuple, nearest_on_oor: bool = True
     ) -> typing.Union[TreeNode, None]:
@@ -280,6 +283,82 @@ class TreeNode:
         if direction in self.child:
             return self.child[direction].query(point, nearest_on_oor)
         return self
+
+    def lca(self, node1: TreeNode, node2: TreeNode) -> TreeNode:
+        node1chain = list[TreeNode]()
+        node2chain = list[TreeNode]()
+        node1p = node1
+        node2p = node2
+        while node1p is not None:
+            node1chain.append(node1p)
+            node1p = node1p.parent
+        while node2p is not None:
+            node2chain.append(node2p)
+            node2p = node2p.parent
+        node1chain.reverse()
+        node2chain.reverse()
+        min_len = min(len(node1chain), len(node2chain))
+        lca_node = None
+        for i in range(min_len):
+            if node1chain[i] is node2chain[i]:
+                lca_node = node1chain[i]
+            else:
+                break
+        return lca_node
+
+    def cross_self(
+        self, start: tuple[float, ...], invVector: tuple[float, ...]
+    ) -> bool:
+        rl = range(len(self.center))
+        tmin = -self.inf
+        tmax = self.inf
+        for i in rl:
+            bound_min = self.bound_min[i]
+            bound_max = self.bound_max[i]
+            if invVector[i] is None:
+                if start[i] < bound_min or start[i] > bound_max:
+                    return False
+            else:
+                invV = invVector[i]
+                t1 = (bound_min - start[i]) * invV
+                t2 = (bound_max - start[i]) * invV
+                if t1 < t2:
+                    if tmin < t1:
+                        tmin = t1
+                    if tmax > t2:
+                        tmax = t2
+                else:
+                    if tmin < t2:
+                        tmin = t2
+                    if tmax > t1:
+                        tmax = t1
+                # tmin = max(tmin, min(t1, t2))
+                # tmax = min(tmax, max(t1, t2))
+                if tmin > tmax:
+                    return False
+        return tmax >= 0 and tmin <= 1
+
+    def cross(self, start: tuple[float, ...], invVector: tuple[float, ...]) -> bool:
+        if self.state == self.empty:
+            return False
+        self_cross = self.cross_self(start, invVector)
+        if self.state == self.full:
+            return self_cross
+        elif self_cross:
+            for child_dir in self.child:
+                if self.child[child_dir].cross(start, invVector):
+                    return True
+        else:
+            return False
+
+    def cross_lca(self, start: tuple[float, ...], end: tuple[float, ...]) -> bool:
+        n1 = self.query(start, True)
+        n2 = self.query(end, True)
+        vector = [end[i] - start[i] for i in range(len(self.center))]
+        invVector = [
+            (None if vector[i] == 0 else 1 / vector[i]) for i in range(len(self.center))
+        ]
+        return self.lca(n1, n2).cross(start, invVector)
 
     def get_parent(self, number: int = 1) -> TreeNode:
         parent = self
@@ -294,8 +373,7 @@ class TreeNode:
         return len(self.child) <= 0
 
     def intersect(self, other: TreeNode) -> bool:
-        rangel = range(len(self.center))
-        for dim in rangel:
+        for dim in self.rangel:
             if (
                 self.bound_min[dim] > other.bound_max[dim]
                 or self.bound_max[dim] < other.bound_min[dim]
@@ -318,16 +396,14 @@ class TreeNode:
 
     def get_bound_by_direction(self, direction: int) -> tuple[float, ...]:
         value = list[float](self.center)
-        rangel = range(len(self.center))
-        dim_bit = 1
-        for dim in rangel:
-            if direction & dim_bit == 0:
+        for dim in self.rangel:
+            if direction & self.bit_value[dim] == 0:
                 value.append(self.bound_min[dim])
             else:
                 value.append(self.bound_max[dim])
-            dim_bit *= 2
         result = (v for v in value)
         return result
+
     def update_state(self):
         full_counter = 0
         empty_counter = 0
@@ -347,6 +423,7 @@ class TreeNode:
             self.state = self.empty
         else:
             self.state = self.half_full
+
     def add(self, point: tuple[float, ...]) -> bool:
         if self.state == self.full:
             return
@@ -362,16 +439,15 @@ class TreeNode:
         if changed:
             self.update_state()
         return changed
+
     def is_min(self) -> bool:
-        rangel = range(len(self.bound_size))
-        for i in rangel:
+        for i in self.rangel:
             if self.bound_size[i] < self.min_length[i]:
                 return True
         return False
 
     def out_of_region(self, point: tuple) -> bool:
-        rangel = range(len(point))
-        for i in rangel:
+        for i in self.rangel:
             if self.bound_min[i] > point[i] or self.bound_max[i] < point[i]:
                 return True
         return False
@@ -380,12 +456,9 @@ class TreeNode:
         if (not allow_oor) and self.out_of_region(point):
             return -1
         result = 0
-        bit_value = 1
-        rangel = range(len(point))
-        for i in rangel:
+        for i in self.rangel:
             if point[i] > self.center[i]:
-                result += bit_value
-            bit_value *= 2
+                result += self.bit_value[i]
         return result
 
     def get_neighbor(self, root: TreeNode) -> set[TreeNode]:
@@ -398,6 +471,8 @@ class QuadTreeNode(TreeNode):
     lb: int = 2
     rb: int = 3
     state: int
+    bit_value: list[int] = [1, 2]
+    rangel: list[int] = [0, 1]
     bound: list[tuple[float, float]]
     bound_min: tuple[float, float]
     bound_max: tuple[float, float]
@@ -491,7 +566,7 @@ class QuadTreeNode(TreeNode):
         if self.state == self.full:
             cv2.rectangle(image, lt, rb, (0, 0, 128), thickness=-1)
         for child_dir in self.child:
-            self.child[child_dir].render(image=image, bound=bound)
+            self.child[child_dir].render(width=width, image=image, bound=bound)
         if is_root and with_graph != None:
             for edge in with_graph.edges:
                 pa = edge.a.tree_node.center
@@ -530,6 +605,8 @@ class OCTreeNode(TreeNode):
     rtb: int = 5
     lbb: int = 6
     rbb: int = 7
+    bit_value: list[int] = [1, 2, 4]
+    rangel: list[int] = [0, 1, 2]
 
     def __init__(
         self,
@@ -738,10 +815,61 @@ def oc_tree_test():
     root.render(with_path=path, show_now=True)
 
 
+def lca_test():
+    import cv2
+    import random
+
+    while True:
+        size = 50
+        root = QuadTreeNode(0, 0, size, size, (1, 1))
+        p1 = (random.random() * size, random.random() * size)
+        p2 = (random.random() * size, random.random() * size)
+        root.add(p1)
+        root.add(p2)
+        lca_node = root.lca(root.query(p1), root.query(p2))
+        pic = lca_node.render(width=640)
+        cv2.imshow("QuadTreeNode", pic)
+        if cv2.waitKey(0) == 27:
+            break
+
+
+def cross_test():
+    import cv2
+    import random
+
+    size = 10
+    root = QuadTreeNode(0, 0, size, size, (1, 1))
+    width = 640
+    while True:
+        print("adding point")
+        for i in range(2):
+            p1 = (random.random() * size, random.random() * size)
+            root.add(p1)
+        cross = root.cross_lca((0, 0), (size, size))
+        pic = root.render(width=width)
+        cv2.line(pic, (0, 0), (width, width), (0, 0, 255) if cross else (0, 255, 0), 2)
+        cv2.imshow("QuadTreeNode", pic)
+        if cv2.waitKey(0) == 27:
+            break
+
+
+def cross_test_bench():
+    import random
+
+    size = 500
+    root = QuadTreeNode(0, 0, size, size, (1, 1))
+    for i in range(size*size):
+        p1 = (random.random() * size, random.random() * size)
+        root.add(p1)
+        cross = root.cross_lca((0, 0), (size, size))
+
+
 if __name__ == "__main__":
     import cProfile
 
     # quad_tree_test()
-    oc_tree_test()
+    # oc_tree_test()
     # cProfile.run("quad_tree_test()", sort="tottime")
     # cProfile.run("oc_tree_test()", sort="tottime")
+    # cross_test()
+    cProfile.run("cross_test_bench()", sort="tottime")

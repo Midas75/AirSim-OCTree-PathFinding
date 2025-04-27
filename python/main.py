@@ -88,12 +88,15 @@ def flyTo(
     for p in ps:
         root.add(p)
     current_node = root.query(current)
-    target_node = root.query(target)
+    # target_node = root.query(target)
     if current_node.state != root.empty:
         current_node.clear()
-    if target_node.state != root.empty:
+    # if target_node.state != root.empty:
+    #     result = False
+    #     print(f"cannot fly to {target} because it is not empty:{target_node.center}")
+    if root.cross_lca(current,target):
         result = False
-        print(f"cannot fly to {target} because it is not empty:{target_node.center}")
+        print(f"cannot fly to {target} because cross")
     real_target_node = root.query(real_target)
     if real_target_node.state != root.empty:
         result = False
