@@ -17,6 +17,7 @@ def getPath(
     pg: PathGraph,
     current: tuple[float, float, float],
     target: tuple[float, float, float],
+    contact_center: bool = True,
 ) -> list[tuple[float, float, float]]:
     print("getting path...  ", end="")
     start = time.time()
@@ -30,17 +31,21 @@ def getPath(
             combineIndex = i
         else:
             break
-
-    path = (
-        [current]
-        + [item.tree_node.center for item in path[combineIndex + 1 :]]
-        + [target]
-    )
+    result_path = [current]
+    for i in range(combineIndex + 1, len(path) - 1, 1):
+        result_path.append(path[i].tree_node.center)
+        if contact_center:
+            c = path[i].tree_node.get_contact_face_center(path[i + 1].tree_node)
+            if c is not None:
+                result_path.append(c)
+    if len(path) > 0:
+        result_path.append(path[-1].tree_node.center)
+    result_path.append(target)
     print(
         f"get path cost {time.time()*1000-start*1000:.2f}ms, start: {current_node.center,current_node.state == current_node.empty} end: {target_node.center,target_node.state == target_node.empty}"
     )
-    print(path)
-    return path
+    print(result_path)
+    return result_path
 
 
 def flyTo(
@@ -50,8 +55,8 @@ def flyTo(
     target: tuple[float, float, float],
     pg: PathGraph,
     dt: float = 0.1,
-    velocity: float = 10,
-    accept_distance: float = 4,
+    velocity: float = 7,
+    accept_distance: float = 3,
 ) -> tuple[bool, bool]:
     result = True
     att = dr.getAttitude(1)
@@ -88,27 +93,28 @@ def flyTo(
     for p in ps:
         root.add(p)
     current_node = root.query(current)
-    # target_node = root.query(target)
+    target_node = root.query(target)
     if current_node.state != root.empty:
         current_node.clear()
-    # if target_node.state != root.empty:
-    #     result = False
-    #     print(f"cannot fly to {target} because it is not empty:{target_node.center}")
-    if root.cross_lca(current,target):
+    if target_node.state != root.empty:
         result = False
-        print(f"cannot fly to {target} because cross")
+        print(f"cannot fly to {target} because it is not empty:{target_node.center}")
+    # only avaliable on balance dividing
+    # if root.cross_lca(current, target):
+    #     result = False
+    #     print(f"cannot fly to {target} because cross")
     real_target_node = root.query(real_target)
     if real_target_node.state != root.empty:
         result = False
         print(
             f"cannot fly to {target} by {real_target_node.center,real_target_node.state == root.empty}"
         )
-        real_target_node.clear()
+        # real_target_node.clear()
     # print(f"moving to {real_target} distance: {distance}")
     if abs(yaw_offset) > 30:
         real_velocity = 0
     if not result:
-        real_velocity = -real_velocity/2
+        real_velocity = -real_velocity / 2
     f = ac.moveByVelocityAsync(  # z x -y
         direction[2] * real_velocity,
         direction[0] * real_velocity,
@@ -122,6 +128,7 @@ def flyTo(
         start = time.time() * 1000
         pg.update(root)
         print(f"update cost {time.time()*1000-start:.2f}ms")
+        f.join()
         return False, False
     # pg.update(root)
     f.join()
@@ -150,10 +157,10 @@ if __name__ == "__main__":
     # z = 500
     # ml = (1, 1, 1)
     x = 100
-    y = 15
+    y = 12
     z = 100
-    ml = (1, 1, 1)
-    root = OCTreeNode(-x, -y, -z, x, y, z, ml)
+    ml = (4, 4, 4)
+    root = OCTreeNode(-x, 1, -z, x, y, z, ml)
     # target = (-297, 12.65, 246.5)
     target = (71, 12, 83)
     root.query(target).divide(4)

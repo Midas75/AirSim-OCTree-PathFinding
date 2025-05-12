@@ -130,7 +130,7 @@ class PathGraph:
     ) -> set[TreeNode]:
         if leaves is None:
             leaves = set[TreeNode]()
-        if tree_node.is_leaf() and tree_node.state == tree_node.empty:
+        if tree_node.is_leaf and tree_node.state == tree_node.empty:
             leaves.add(tree_node)
             self.add_node(tree_node)
             return leaves
@@ -153,8 +153,8 @@ class PathGraph:
         for e in self.edges:
             tna = e.a.tree_node
             tnb = e.b.tree_node
-            a_expire = tna.state != tna.empty or not tna.is_leaf()
-            b_expire = tnb.state != tnb.empty or not tnb.is_leaf()
+            a_expire = tna.state != tna.empty or not tna.is_leaf
+            b_expire = tnb.state != tnb.empty or not tnb.is_leaf
             if a_expire or b_expire:
                 expire_edges.add(e)
             if a_expire and not b_expire:
@@ -255,6 +255,8 @@ class TreeNode:
     parent: TreeNode
     _min: bool
     inf: float = float("inf")
+    dims: int
+    is_leaf: bool = True
 
     def __init__(self, min_length: tuple[float, ...]) -> None:
         self.state = self.empty
@@ -264,6 +266,7 @@ class TreeNode:
     def clear(self) -> None:
         self.child.clear()
         self.state = self.empty
+        self.is_leaf = True
         parent = self.parent
         while True:
             if parent is None:
@@ -277,7 +280,7 @@ class TreeNode:
         if (not nearest_on_oor) and self.out_of_region(point):
             return None
 
-        if self.is_leaf():
+        if self.is_leaf:
             return self
         direction = self.get_direction(point, allow_oor=True)
         if direction in self.child:
@@ -309,7 +312,7 @@ class TreeNode:
     def cross_self(
         self, start: tuple[float, ...], invVector: tuple[float, ...]
     ) -> bool:
-        rl = range(len(self.center))
+        rl = range(self.dims)
         tmin = -self.inf
         tmax = self.inf
         for i in rl:
@@ -354,9 +357,9 @@ class TreeNode:
     def cross_lca(self, start: tuple[float, ...], end: tuple[float, ...]) -> bool:
         n1 = self.query(start, True)
         n2 = self.query(end, True)
-        vector = [end[i] - start[i] for i in range(len(self.center))]
+        vector = [end[i] - start[i] for i in self.rangel]
         invVector = [
-            (None if vector[i] == 0 else 1 / vector[i]) for i in range(len(self.center))
+            (None if vector[i] == 0 else 1 / vector[i]) for i in self.rangel
         ]
         return self.lca(n1, n2).cross(start, invVector)
 
@@ -368,9 +371,6 @@ class TreeNode:
             else:
                 break
         return parent
-
-    def is_leaf(self) -> bool:
-        return len(self.child) <= 0
 
     def intersect(self, other: TreeNode) -> bool:
         for dim in self.rangel:
@@ -385,24 +385,33 @@ class TreeNode:
         if recursive_depth == 0 or self._min or self.state != self.empty:
             return
         else:
-            ri = range(int(math.pow(2, len(self.center))))
+            ri = range(2**self.dims)
             for d in ri:
                 if d not in self.child:
-                    self.child[d] = self.__class__(
-                        *self.get_bound_by_direction(d), self.min_length
-                    )
-                    self.child[d].parent = self
-                    self.child[d].divide(recursive_depth - 1)
+                    b, rd = self.get_bound_by_direction(d)
+                    if rd == d:
+                        self.child[d] = self.__class__(*b, self.min_length)
+                        self.child[d].parent = self
+                        self.child[d].divide(recursive_depth - 1)
+                        self.is_leaf = False
+                    else:
+                        self.child[d] = self.child[rd]
 
-    def get_bound_by_direction(self, direction: int) -> tuple[float, ...]:
-        value = list[float](self.center)
+    def get_bound_by_direction(self, direction: int) -> tuple[list[float], int]:
+        value = [0] * self.dims * 2
+        reduced_direction = direction
         for dim in self.rangel:
-            if direction & self.bit_value[dim] == 0:
-                value.append(self.bound_min[dim])
+            if self.bound_size[dim] <= self.min_length[dim]:
+                reduced_direction &= ~self.bit_value[dim]
+                value[dim] = self.bound_min[dim]
+                value[dim + self.dims] = self.bound_max[dim]
+            elif direction & self.bit_value[dim] == 0:
+                value[dim] = self.bound_min[dim]
+                value[dim + self.dims] = self.center[dim]
             else:
-                value.append(self.bound_max[dim])
-        result = (v for v in value)
-        return result
+                value[dim] = self.center[dim]
+                value[dim + self.dims] = self.bound_max[dim]
+        return value, reduced_direction
 
     def update_state(self):
         full_counter = 0
@@ -418,6 +427,7 @@ class TreeNode:
                 empty_counter += 1
         if empty_counter == 0 and half_full_counter == 0:
             self.state = self.full
+            self.is_leaf = True
             self.child.clear()
         elif full_counter == 0 and half_full_counter == 0:
             self.state = self.empty
@@ -441,10 +451,13 @@ class TreeNode:
         return changed
 
     def is_min(self) -> bool:
+        result = True
         for i in self.rangel:
             if self.bound_size[i] < self.min_length[i]:
-                return True
-        return False
+                pass
+            else:
+                result = False
+        return result
 
     def out_of_region(self, point: tuple) -> bool:
         for i in self.rangel:
@@ -464,19 +477,52 @@ class TreeNode:
     def get_neighbor(self, root: TreeNode) -> set[TreeNode]:
         raise NotImplementedError()
 
+    def contact_with(self, other: TreeNode) -> list[bool]:
+        result = [False] * (self.dims + 1)
+        for i in self.rangel:
+            max_size2 = self.bound_size[i] + other.bound_size[i] + self.min_length[i]
+            min_size2 = self.bound_size[i] + other.bound_size[i] - self.min_length[i]
+            c2c2 = 2 * abs(self.center[i] - other.center[i])
+            if max_size2 < c2c2:
+                return result
+            if min_size2 > c2c2:
+                result[i + 1] = True
+        result[0] = True
+        return result
+
+    def get_contact_face_center(
+        self, other: TreeNode
+    ) -> typing.Union[tuple[float, ...], None]:
+        cw = self.contact_with(other)
+        if not cw[0]:
+            return None
+        center = [0] * self.dims
+        for i in self.rangel:
+            if cw[i + 1]:
+                if self.bound_size[i] < other.bound_size[i]:
+                    center[i] = self.center[i]
+                else:
+                    center[i] = other.center[i]
+            else:
+                if self.center[i] < other.center[i]:
+                    center[i] = self.center[i] + self.bound_size[i] / 2
+                else:
+                    center[i] = self.center[i] - self.bound_size[i] / 2
+        return center
+
 
 class QuadTreeNode(TreeNode):
     lt: int = 0
     rt: int = 1
     lb: int = 2
     rb: int = 3
-    state: int
     bit_value: list[int] = [1, 2]
     rangel: list[int] = [0, 1]
     bound: list[tuple[float, float]]
     bound_min: tuple[float, float]
     bound_max: tuple[float, float]
     center: tuple[float, float]
+    dims: int = 2
 
     def __init__(
         self,
@@ -545,6 +591,7 @@ class QuadTreeNode(TreeNode):
         bound: list[tuple[float, float]] = None,
         with_graph: PathGraph = None,
         with_path: list[PathNode] = None,
+        with_cotact_center: bool = True,
     ) -> numpy.ndarray:
         import cv2
 
@@ -592,7 +639,22 @@ class QuadTreeNode(TreeNode):
                     int((pb[0] - bound[0][0]) / (bound[1][0] - bound[0][0]) * width),
                     int((pb[1] - bound[0][1]) / (bound[1][1] - bound[0][1]) * width),
                 )
-                cv2.line(image, pa, pb, (255, 255, 255), 2)
+                if not with_cotact_center:
+                    cv2.line(image, pa, pb, (255, 255, 255), 2)
+                else:
+                    pc = with_path[i].tree_node.get_contact_face_center(
+                        with_path[i + 1].tree_node
+                    )
+                    pc = (
+                        int(
+                            (pc[0] - bound[0][0]) / (bound[1][0] - bound[0][0]) * width
+                        ),
+                        int(
+                            (pc[1] - bound[0][1]) / (bound[1][1] - bound[0][1]) * width
+                        ),
+                    )
+                    cv2.line(image, pa, pc, (255, 255, 255), 2)
+                    cv2.line(image, pc, pb, (255, 255, 255), 2)
         return image
 
 
@@ -607,6 +669,7 @@ class OCTreeNode(TreeNode):
     rbb: int = 7
     bit_value: list[int] = [1, 2, 4]
     rangel: list[int] = [0, 1, 2]
+    dims: int = 3
 
     def __init__(
         self,
@@ -775,22 +838,27 @@ def quad_tree_test():
     import random
     import time
 
-    root = QuadTreeNode(0, 0, 50, 50)
+    root = QuadTreeNode(0, 0, 50, 50, (10, 1))
     # root.divide(3)
     graph = PathGraph()
-    for test_times in range(1):
-        points = [(random.random() * 50, random.random() * 50) for i in range(1000)]
+    for test_times in range(10):
+        points = [(random.random() * 50, random.random() * 50) for i in range(1)]
         # points = [(23, 23), (26, 26)]
-        start = time.time()
+        start = time.perf_counter()
         for p in points:
             root.add(p)
         graph.update(root)
         path = None
         path = graph.get_path(root.query((0, 0)), root.query((50, 50)))
-        print(f"{(time.time()-start)*1000:.2f}ms")
-        # cv2.imshow("QuadTreeNode", root.render(with_graph=graph, with_path=path))
-        # if cv2.waitKey(0) == 27:
-        #     break
+        print(f"{(time.perf_counter()-start)*1000:.2f}ms")
+        cv2.imshow(
+            "QuadTreeNode",
+            root.render(
+                width=840, with_graph=graph, with_path=path, with_cotact_center=True
+            ),
+        )
+        if cv2.waitKey(0) == 27:
+            break
 
 
 def oc_tree_test():
@@ -808,9 +876,9 @@ def oc_tree_test():
         for p in points:
             root.add(p)
 
-        start = time.time()
+        start = time.perf_counter()
         graph.update(root)
-        print(f"{(time.time()-start)*1000:.2f}")
+        print(f"{(time.perf_counter()-start)*1000:.2f}")
         path = graph.get_path(root.query((0, 0, 0)), root.query((size, size, size)))
     root.render(with_path=path, show_now=True)
 
@@ -858,7 +926,7 @@ def cross_test_bench():
 
     size = 500
     root = QuadTreeNode(0, 0, size, size, (1, 1))
-    for i in range(size*size):
+    for i in range(size * size):
         p1 = (random.random() * size, random.random() * size)
         root.add(p1)
         cross = root.cross_lca((0, 0), (size, size))
@@ -867,9 +935,9 @@ def cross_test_bench():
 if __name__ == "__main__":
     import cProfile
 
-    # quad_tree_test()
+    quad_tree_test()
     # oc_tree_test()
     # cProfile.run("quad_tree_test()", sort="tottime")
     # cProfile.run("oc_tree_test()", sort="tottime")
     # cross_test()
-    cProfile.run("cross_test_bench()", sort="tottime")
+    # cProfile.run("cross_test_bench()", sort="tottime")
