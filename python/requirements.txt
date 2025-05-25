@@ -2,3 +2,5 @@ numpy
 open3d
 opencv-python
 sortedcontainers
+# pip uninstall msgpack-rpc-python
+rpc-msgpack

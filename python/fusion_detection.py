@@ -84,7 +84,7 @@ def getPointCloudPoints(
     image: drone_request.Image = None,
     depthThreshold: float = 100,
     whRatio: float = 1280 / 768,
-) -> tuple[list[tuple[float, float, float]], list[tuple[float, float, float]]]:
+) -> tuple[list[tuple[float, float, float,bool]], list[tuple[float, float, float]]]:
     points = []
     colors = []
     q = (attitude.rx, attitude.ry, attitude.rz, attitude.rw)
@@ -95,8 +95,9 @@ def getPointCloudPoints(
     for r in range(depth.row):
         for c in range(depth.col):
             depthValue = depth.depths[r][c]
+            empty = False
             if depthThreshold - depthValue < 1:
-                continue
+                empty = True
             center = [(c + 0.5) / depth.col, 1 - (r + 0.5) / depth.row]
             targetDirection = (
                 whRatio * fovRatio * (center[0] - 0.5),
@@ -110,11 +111,7 @@ def getPointCloudPoints(
                 p[0] + targetDirection[0] * depthValue,
                 p[1] + targetDirection[1] * depthValue,
                 p[2] + targetDirection[2] * depthValue,
-            )
-            pointPosition = (
-                pointPosition[0],
-                pointPosition[1],
-                pointPosition[2],
+                empty
             )
             points.append(pointPosition)
             if image is not None:

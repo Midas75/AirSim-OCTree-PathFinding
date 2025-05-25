@@ -4,6 +4,7 @@ import typing
 import math
 from sortedcontainers import SortedSet
 import open3d as o3d
+import json
 
 hash = 0
 tuple_hash = dict[tuple, int]()
@@ -34,12 +35,16 @@ class PathNode:
         self.h = 0
         self.edges = set[PathEdge]()
 
-    def distance(self, other: PathNode) -> float:
+    def distance(self, other: PathNode, unknown_penalty: bool = True) -> float:
+        up_factor = 0.2
+        if unknown_penalty:
+            if (not self.tree_node.known) or (not other.tree_node.known):
+                up_factor = 1
         v = [
             (self.tree_node.center[i] - other.tree_node.center[i]) ** 2
             for i in self.tree_node.rangel
         ]
-        return math.sqrt(sum(v))
+        return math.sqrt(sum(v)) * up_factor
 
     def __eq__(self, value: object) -> bool:
         return self.id == value.id
@@ -201,7 +206,9 @@ class PathGraph:
             current = current.from_node
         path_list.reverse()
 
-    def get_path(self, tree_start: TreeNode, tree_end: TreeNode) -> list[PathNode]:
+    def get_path(
+        self, tree_start: TreeNode, tree_end: TreeNode, unknown_penalty: bool = True
+    ) -> list[PathNode]:
         result = list[PathNode]()
         start = self.find_node(tree_start)
         end = self.find_node(tree_end)
@@ -212,7 +219,7 @@ class PathGraph:
         openSet = SortedSet[PathNode](key=lambda o: o.f)
         closedSet = set[PathNode]()
         start.g = 0
-        start.h = start.distance(end)
+        start.h = start.distance(end, unknown_penalty)
         start.f = start.g + start.h
         openSet.add(start)
         while len(openSet) > 0:
@@ -257,15 +264,70 @@ class TreeNode:
     inf: float = float("inf")
     dims: int
     is_leaf: bool = True
+    rangel: list[int]
+    known: bool = False
 
     def __init__(self, min_length: tuple[float, ...]) -> None:
         self.state = self.empty
         self.min_length = min_length
         self.parent = None
 
+    def serialize(self, is_top: bool = True) -> dict[str, typing.Any]:
+        obj = dict[str, typing.Any]()
+        obj["bound"] = [list(bound) for bound in self.bound]
+        obj["state"] = self.state
+        obj["known"] = self.known
+        if is_top:
+            obj["min_length"] = list(self.min_length)
+            obj["_class"] = self.__class__.__name__
+        obj["child"] = dict[str, typing.Any]()
+        for k in self.child:
+            obj["child"][str(k)] = self.child[k].serialize(is_top=False)
+        return obj
+
+    def deserialize(
+        obj: dict[str, typing.Any],
+        is_top: bool = True,
+        with_min_length: list[float] = None,
+        with_class: type[TreeNode] = None,
+    ) -> typing.Union[OCTreeNode, QuadTreeNode]:
+        if is_top:
+            with_class = globals().get(obj["_class"])
+            with_min_length = tuple(obj["min_length"])
+        if with_class is None:
+            raise NotImplementedError(obj["_class"])
+        bound = list[float]()
+        for b in obj["bound"]:
+            for v in b:
+                bound.append(v)
+        node: TreeNode = with_class(*bound, with_min_length)
+        node.known = obj["known"]
+        node.state = obj["state"]
+        if len(obj["child"]) > 0:
+            node.is_leaf = False
+        for k in obj["child"]:
+            node.child[int(k)] = child_node = TreeNode.deserialize(
+                obj["child"][k],
+                is_top=False,
+                with_min_length=with_min_length,
+                with_class=with_class,
+            )
+            child_node.parent = node
+        node.update_state()
+        return node
+
+    def save(self, path: str = None):
+        if path is None:
+            path = f"{self.__class__.__name__}.json"
+        json.dump(self.serialize(), open(path, "w"))
+
+    def load(path: str = None) -> typing.Union[OCTreeNode, QuadTreeNode]:
+        return TreeNode.deserialize(json.load(open(path)))
+
     def clear(self) -> None:
         self.child.clear()
         self.state = self.empty
+        self.known = False
         self.is_leaf = True
         parent = self.parent
         while True:
@@ -358,9 +420,7 @@ class TreeNode:
         n1 = self.query(start, True)
         n2 = self.query(end, True)
         vector = [end[i] - start[i] for i in self.rangel]
-        invVector = [
-            (None if vector[i] == 0 else 1 / vector[i]) for i in self.rangel
-        ]
+        invVector = [(None if vector[i] == 0 else 1 / vector[i]) for i in self.rangel]
         return self.lca(n1, n2).cross(start, invVector)
 
     def get_parent(self, number: int = 1) -> TreeNode:
@@ -392,6 +452,7 @@ class TreeNode:
                     if rd == d:
                         self.child[d] = self.__class__(*b, self.min_length)
                         self.child[d].parent = self
+                        # self.child[d].known = self.known
                         self.child[d].divide(recursive_depth - 1)
                         self.is_leaf = False
                     else:
@@ -414,6 +475,9 @@ class TreeNode:
         return value, reduced_direction
 
     def update_state(self):
+        if len(self.child) <= 0:
+            self.is_leaf = True
+            return
         full_counter = 0
         empty_counter = 0
         half_full_counter = 0
@@ -434,21 +498,66 @@ class TreeNode:
         else:
             self.state = self.half_full
 
-    def add(self, point: tuple[float, ...]) -> bool:
+    def add(self, point: tuple[float, ...], empty: bool = False) -> bool:
         if self.state == self.full:
-            return
+            return False
         direction = self.get_direction(point)
         if direction < 0:
             return False
-            # raise Exception(f"{point} is not in bound {self.bound}")
-        if self._min:
+        if self.state == self.empty and empty:
+            self.known = True
+            return True
+        elif self._min and not empty:
             self.state = self.full
             return True
         self.divide(1)
-        changed: bool = self.child[direction].add(point)
+        changed: bool = self.child[direction].add(point, empty)
         if changed:
             self.update_state()
         return changed
+
+    # assume intersect
+    def ray_out_intersect(
+        self, point: tuple[float, ...], direction: tuple[float, ...]
+    ) -> tuple[float, ...]:
+        t_min = -self.inf
+        t_max = self.inf
+        for dim in self.rangel:
+            t1 = (self.bound_min[dim] - point[dim]) / direction[dim]
+            t2 = (self.bound_max[dim] - point[dim]) / direction[dim]
+            if t1 > t2:
+                t_near = t2
+                t_far = t1
+            else:
+                t_near = t1
+                t_far = t2
+            if t_min < t_near:
+                t_min = t_near
+            if t_max > t_far:
+                t_max = t_far
+        exit_t = t_max
+        return tuple(point[dim] + exit_t * direction[dim] for dim in self.rangel)
+
+    def add_raycast(
+        self,
+        start: tuple[float, ...],
+        point: tuple[float, ...],
+        empty_end: bool = False,
+    ) -> None:
+        self.add(point, empty_end)
+        current = list(start)
+        direction = [point[dim] - start[dim] for dim in self.rangel]
+        sign = [1 if direction[dim] > 0 else -1 for dim in self.rangel]
+        unit_dir = [self.min_length[dim] / 2 * sign[dim] for dim in self.rangel]
+        while True:
+            cnode = self.query(current, False)
+            if (cnode is None) or (cnode.state != self.empty):
+                break
+            self.add(current, empty=True)
+            current = cnode.ray_out_intersect(start, direction)
+            current = [unit_dir[dim] + current[dim] for dim in self.rangel]
+
+        # self.add(point, empty_end)
 
     def is_min(self) -> bool:
         result = True
@@ -612,6 +721,8 @@ class QuadTreeNode(TreeNode):
         cv2.rectangle(image, lt, rb, (128, 0, 0), 2)
         if self.state == self.full:
             cv2.rectangle(image, lt, rb, (0, 0, 128), thickness=-1)
+        elif self.known and self.is_leaf:
+            cv2.rectangle(image, lt, rb, (128, 64, 64), thickness=-1)
         for child_dir in self.child:
             self.child[child_dir].render(width=width, image=image, bound=bound)
         if is_root and with_graph != None:
@@ -799,6 +910,7 @@ class OCTreeNode(TreeNode):
         geometries: list[o3d.geometry.Geometry] = None,
         with_graph: PathGraph = None,
         with_path: list[PathNode] = None,
+        with_cotact_center: bool = True,
         show_now: bool = False,
     ) -> list[o3d.geometry.Geometry]:
         is_root = False
@@ -818,10 +930,20 @@ class OCTreeNode(TreeNode):
             merge_mesh.compute_vertex_normals()
             geometries = [merge_mesh]
         if with_path is not None:
-            connection = [[i, i + 1] for i in range(len(with_path) - 1)]
             points = list[tuple[float, float, float]]()
-            for pn in with_path:
-                points.append(pn.tree_node.center)
+            if not with_cotact_center:
+                for pn in with_path:
+                    points.append(pn.tree_node.center)
+            else:
+                for i in range(len(with_path) - 1):
+                    points.append(with_path[i].tree_node.center)
+                    points.append(
+                        with_path[i].tree_node.get_contact_face_center(
+                            with_path[i + 1].tree_node
+                        )
+                    )
+                points.append(with_path[-1].tree_node.center)
+            connection = [[i, i + 1] for i in range(len(points) - 1)]
             ls = o3d.geometry.LineSet(
                 o3d.utility.Vector3dVector(points),
                 o3d.utility.Vector2iVector(connection),
@@ -838,7 +960,7 @@ def quad_tree_test():
     import random
     import time
 
-    root = QuadTreeNode(0, 0, 50, 50, (10, 1))
+    root = QuadTreeNode(0, 0, 50, 50, (15, 2))
     # root.divide(3)
     graph = PathGraph()
     for test_times in range(10):
@@ -932,10 +1054,64 @@ def cross_test_bench():
         cross = root.cross_lca((0, 0), (size, size))
 
 
+def raycast_test():
+    import cv2
+    import random
+    import time
+
+    root = QuadTreeNode(0, 0, 50, 50, (1, 1))
+    graph = PathGraph()
+
+    for test_times in range(100):
+        points = [(random.random() * 50, random.random() * 50) for i in range(1)]
+        # points = [(23, 23), (26, 26)]
+        start = time.perf_counter()
+        for p in points:
+            root.add_raycast((0, 0, 0), p)
+        graph.update(root)
+        path = None
+        path = graph.get_path(root.query((0, 0)), root.query((50, 50)))
+        print(f"{(time.perf_counter()-start)*1000:.2f}ms")
+        cv2.imshow(
+            "QuadTreeNode",
+            root.render(
+                width=840, with_graph=graph, with_path=path, with_cotact_center=True
+            ),
+        )
+        if cv2.waitKey(0) == 27:
+            break
+
+
+def serialize_test():
+    import random
+    import json
+    import cv2
+
+    root = QuadTreeNode(0, 0, 50, 50, (1, 1))
+    points = [(random.random() * 50, random.random() * 50) for i in range(10)]
+    for p in points:
+        root.add_raycast((0, 0, 0), p)
+    open("t.json", "w").write(json.dumps(root.serialize()))
+    cv2.imshow("QuadTree", root.render(width=840))
+
+
+def deserialize_test():
+    import json
+    import cv2
+
+    serialize_test()
+    root: QuadTreeNode = TreeNode.deserialize(json.load(open("t.json")))
+    cv2.imshow("Deserialized QuadTree", root.render(width=840))
+    cv2.waitKey(0)
+
+
 if __name__ == "__main__":
     import cProfile
 
-    quad_tree_test()
+    deserialize_test()
+    # serialize_test()
+    # raycast_test()
+    # quad_tree_test()
     # oc_tree_test()
     # cProfile.run("quad_tree_test()", sort="tottime")
     # cProfile.run("oc_tree_test()", sort="tottime")
