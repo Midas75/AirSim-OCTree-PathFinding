@@ -324,6 +324,27 @@ class TreeNode:
     def load(path: str = None) -> typing.Union[OCTreeNode, QuadTreeNode]:
         return TreeNode.deserialize(json.load(open(path)))
 
+    def path_smoothing(
+        self, path: list[tuple[float, ...]]
+    ) -> tuple[bool, list[tuple[float, ...]]]:
+        changed = False
+        if len(path) <= 2:
+            return changed, path
+        result = list[tuple[float, ...]]()
+        result.append(path[0])
+
+        i = 0
+        while i < len(path)-1:
+            j = len(path)-1
+            while j > i+1:
+                if not self.cross_lca(path[i],path[j]):
+                    changed = True
+                    break
+                j-=1
+            result.append(path[j])
+            i = j
+        return changed, result
+
     def clear(self) -> None:
         self.child.clear()
         self.state = self.empty
@@ -699,7 +720,7 @@ class QuadTreeNode(TreeNode):
         image: numpy.ndarray = None,
         bound: list[tuple[float, float]] = None,
         with_graph: PathGraph = None,
-        with_path: list[PathNode] = None,
+        with_path: list[typing.Union[PathNode, tuple[float, float]]] = None,
         with_cotact_center: bool = True,
     ) -> numpy.ndarray:
         import cv2
@@ -710,13 +731,15 @@ class QuadTreeNode(TreeNode):
         if image is None:
             is_root = True
             image = numpy.ones((width, width, 3), dtype=numpy.uint8) * 200
+        x_ratio = 1 / (bound[1][0] - bound[0][0]) * width
+        y_ratio = 1 / (bound[1][1] - bound[0][1]) * width
         lt = (
-            int((self.x1() - bound[0][0]) / (bound[1][0] - bound[0][0]) * width),
-            int((self.y1() - bound[0][1]) / (bound[1][1] - bound[0][1]) * width),
+            int((self.x1() - bound[0][0]) * x_ratio),
+            int((self.y1() - bound[0][1]) * y_ratio),
         )
         rb = (
-            int((self.x2() - bound[0][0]) / (bound[1][0] - bound[0][0]) * width),
-            int((self.y2() - bound[0][1]) / (bound[1][1] - bound[0][1]) * width),
+            int((self.x2() - bound[0][0]) * x_ratio),
+            int((self.y2() - bound[0][1]) * y_ratio),
         )
         cv2.rectangle(image, lt, rb, (128, 0, 0), 2)
         if self.state == self.full:
@@ -725,47 +748,56 @@ class QuadTreeNode(TreeNode):
             cv2.rectangle(image, lt, rb, (128, 64, 64), thickness=-1)
         for child_dir in self.child:
             self.child[child_dir].render(width=width, image=image, bound=bound)
+
         if is_root and with_graph != None:
             for edge in with_graph.edges:
                 pa = edge.a.tree_node.center
                 pa = (
-                    int((pa[0] - bound[0][0]) / (bound[1][0] - bound[0][0]) * width),
-                    int((pa[1] - bound[0][1]) / (bound[1][1] - bound[0][1]) * width),
+                    int((pa[0] - bound[0][0]) * x_ratio),
+                    int((pa[1] - bound[0][1]) * y_ratio),
                 )
                 pb = edge.b.tree_node.center
                 pb = (
-                    int((pb[0] - bound[0][0]) / (bound[1][0] - bound[0][0]) * width),
-                    int((pb[1] - bound[0][1]) / (bound[1][1] - bound[0][1]) * width),
+                    int((pb[0] - bound[0][0]) * x_ratio),
+                    int((pb[1] - bound[0][1]) * y_ratio),
                 )
                 cv2.line(image, pa, pb, (0, 200, 0), 2)
         if is_root and with_path != None:
-            for i in range(len(with_path) - 1):
-                pa = with_path[i].tree_node.center
-                pa = (
-                    int((pa[0] - bound[0][0]) / (bound[1][0] - bound[0][0]) * width),
-                    int((pa[1] - bound[0][1]) / (bound[1][1] - bound[0][1]) * width),
-                )
-                pb = with_path[i + 1].tree_node.center
-                pb = (
-                    int((pb[0] - bound[0][0]) / (bound[1][0] - bound[0][0]) * width),
-                    int((pb[1] - bound[0][1]) / (bound[1][1] - bound[0][1]) * width),
-                )
-                if not with_cotact_center:
+            if isinstance(with_path[0], PathNode):
+                for i in range(len(with_path) - 1):
+                    pa = with_path[i].tree_node.center
+                    pa = (
+                        int((pa[0] - bound[0][0]) * x_ratio),
+                        int((pa[1] - bound[0][1]) * y_ratio),
+                    )
+                    pb = with_path[i + 1].tree_node.center
+                    pb = (
+                        int((pb[0] - bound[0][0]) * x_ratio),
+                        int((pb[1] - bound[0][1]) * y_ratio),
+                    )
+                    if not with_cotact_center:
+                        cv2.line(image, pa, pb, (255, 255, 255), 2)
+                    else:
+                        pc = with_path[i].tree_node.get_contact_face_center(
+                            with_path[i + 1].tree_node
+                        )
+                        pc = (
+                            int((pc[0] - bound[0][0]) * x_ratio),
+                            int((pc[1] - bound[0][1]) * y_ratio),
+                        )
+                        cv2.line(image, pa, pc, (255, 255, 255), 2)
+                        cv2.line(image, pc, pb, (255, 255, 255), 2)
+            elif isinstance(with_path[0], tuple):
+                for i in range(len(with_path) - 1):
+                    pa = (
+                        int((with_path[i][0] - bound[0][0]) * x_ratio),
+                        int((with_path[i][1] - bound[0][1]) * y_ratio),
+                    )
+                    pb = (
+                        int((with_path[i + 1][0] - bound[0][0]) * x_ratio),
+                        int((with_path[i + 1][1] - bound[0][1]) * y_ratio),
+                    )
                     cv2.line(image, pa, pb, (255, 255, 255), 2)
-                else:
-                    pc = with_path[i].tree_node.get_contact_face_center(
-                        with_path[i + 1].tree_node
-                    )
-                    pc = (
-                        int(
-                            (pc[0] - bound[0][0]) / (bound[1][0] - bound[0][0]) * width
-                        ),
-                        int(
-                            (pc[1] - bound[0][1]) / (bound[1][1] - bound[0][1]) * width
-                        ),
-                    )
-                    cv2.line(image, pa, pc, (255, 255, 255), 2)
-                    cv2.line(image, pc, pb, (255, 255, 255), 2)
         return image
 
 
@@ -1105,10 +1137,42 @@ def deserialize_test():
     cv2.waitKey(0)
 
 
+def path_smoothing_test():
+    import cv2
+    import random
+
+    root = QuadTreeNode(0, 0, 50, 50, (1, 1))
+    points = [(random.random() * 50, random.random() * 50) for i in range(50)]
+    for p in points:
+        root.add_raycast((0, 0, 0), p)
+    graph = PathGraph()
+    graph.update(root)
+    path = graph.get_path(root.query((0, 0)), root.query((50, 50)))
+    path_point = []
+    path_point.append(path[0].tree_node.center)
+    for i in range(1, len(path)):
+        path_point.append(
+            path[i - 1].tree_node.get_contact_face_center(path[i].tree_node)
+        )
+        path_point.append(path[i].tree_node.center)
+    cv2.imshow(
+        "Path",
+        root.render(width=840, with_graph=graph, with_path=path_point),
+    )
+    _, path_smoothed = root.path_smoothing(path_point)
+    print(path_smoothed)
+    cv2.imshow(
+        "Smoothed Path",
+        root.render(width=840, with_graph=graph, with_path=path_smoothed),
+    )
+    cv2.waitKey(0)
+
+
 if __name__ == "__main__":
     import cProfile
 
-    deserialize_test()
+    path_smoothing_test()
+    # deserialize_test()
     # serialize_test()
     # raycast_test()
     # quad_tree_test()

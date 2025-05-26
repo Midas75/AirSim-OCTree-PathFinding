@@ -43,6 +43,7 @@ def getPath(
     if len(path) > 0:
         result_path.append(path[-1].tree_node.center)
     result_path.append(target)
+    _, result_path = root.path_smoothing(result_path)
     print(
         f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms, start: {current_node.center} end: {target_node.center}"
     )
