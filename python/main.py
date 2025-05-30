@@ -1,12 +1,15 @@
-from tree import PathGraph, OCTreeNode
+import time
+import math
+import os
+import datetime
+
+from tree import PathGraph, TreeNode
 import drone_request
 import fusion_detection
 import airsim
-import time
-import math
+
 from msgpackrpc.future import Future
-import os
-import datetime
+
 
 all_points = []
 all_colors = []
@@ -15,47 +18,32 @@ all_path_colors = []
 
 
 def getPath(
-    root: OCTreeNode,
-    pg: PathGraph,
-    current: tuple[float, float, float],
-    target: tuple[float, float, float],
-    contact_center: bool = True,
+    root: TreeNode, pg: PathGraph, current: list[float], target: list[float]
 ) -> list[tuple[float, float, float]]:
     print("getting path...  ", end="")
     start = time.perf_counter()
-
     current_node = root.query(current)
     target_node = root.query(target)
-    path = pg.get_path(current_node, target_node, False)
-    combineIndex = 0
+    path = pg.get_path(current_node, target_node)
+    c_path = [current] + pg.interpolation_center(path) + [target]
+    _, s_path = root.path_smoothing(c_path, expand=root.min_length)
     # for i in range(len(path)):
     #     if current_node == path[i].tree_node:
     #         combineIndex = i
     #     else:
     #         break
-    result_path = [current]
-    for i in range(combineIndex, len(path) - 1, 1):
-        result_path.append(path[i].tree_node.center)
-        if contact_center:
-            c = path[i].tree_node.get_contact_face_center(path[i + 1].tree_node)
-            if c is not None:
-                result_path.append(c)
-    if len(path) > 0:
-        result_path.append(path[-1].tree_node.center)
-    result_path.append(target)
-    _, result_path = root.path_smoothing(result_path)
     print(
         f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms, start: {current_node.center} end: {target_node.center}"
     )
     # print(result_path)
-    return result_path
+    return s_path
 
 
-def flyTo(
+def fly_to(
     ac: airsim.MultirotorClient,
     dr: drone_request.DroneRequestClient,
-    root: OCTreeNode,
-    target: tuple[float, float, float],
+    root: TreeNode,
+    target: list[float],
     pg: PathGraph,
     dt: float = 0.1,
     velocity: float = 5,
@@ -91,7 +79,7 @@ def flyTo(
     ps, cs = fusion_detection.getPointCloudPoints(
         dr.getDepth(1), dr.getAttitude(1), dr.getImage(1), 100
     )
-    for i in range(len(ps)):
+    for i,p in enumerate(ps):
         p = ps[i]
         c = cs[i]
         if not p[-1]:
@@ -100,16 +88,16 @@ def flyTo(
         root.add_raycast(current, p, p[-1])
     current_node = root.query(current)
     target_node = root.query(target)
-    if current_node.state != root.empty:
+    if current_node.state != root.EMPTY:
         current_node.clear()
-    if target_node.state != root.empty:
+    if target_node.state != root.EMPTY:
         result = False
         print(f"cannot fly to {target} because it is not empty:{target_node.center}")
     # only avaliable on balance dividing
     if result and root.cross_lca(current, target):
         result = False
         print(f"cannot fly to {target} because cross")
-    real_target = [current[i] + direction[i] * real_velocity for i in range(3)]
+    # real_target = [current[i] + direction[i] * real_velocity for i in range(3)]
     # real_target_node = root.query(real_target)
     # if result and real_target_node.state != root.empty:
     #     result = False
