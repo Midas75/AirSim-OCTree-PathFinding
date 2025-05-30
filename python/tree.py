@@ -7,7 +7,11 @@ import time
 import math
 import itertools
 import typing
+import json
+import gzip
+
 import numpy
+
 
 from sortedcontainers import SortedSet
 
@@ -327,6 +331,14 @@ class TreeNode:
                 self.child[direction].serialize(_result)
         return _result
 
+    def save(self, path: str = None):
+        if path is None:
+            path = f"{self.__class__.__name__}.json.gz"
+        with open(path, "wb") as f:
+            j = json.dumps(self.serialize())
+            gz = gzip.compress(j.encode("utf-8"))
+            f.write(gz)
+
     @staticmethod
     def deserialize(obj: dict[str, typing.Any]) -> TreeNode:
         root = TreeNode().as_root(obj["bound_min"], obj["bound_max"], obj["min_length"])
@@ -339,6 +351,14 @@ class TreeNode:
             node = root.nodes[int(n_id)]
             node.known = info["known"]
         return root
+
+    @staticmethod
+    def load(path: str = None) -> TreeNode:
+        if path is None:
+            path = f"{__class__.__name__}.json.gz"
+        with open(path, "rb") as f:
+            j = gzip.decompress(f.read()).decode("utf-8")
+            return TreeNode.deserialize(json.loads(j))
 
     def path_smoothing(
         self, path: list[list[float]], expand: list[float] = None
@@ -1101,13 +1121,13 @@ class TreeTest:
     @staticmethod
     def serialize_deserialize_test():
         tn = TreeNode().as_root([0, 0], [50, 50], [1, 1])
-        for _i in range(20):
-            tn.add(
-                [
-                    random.random() * tn.bound_size[0],
-                    random.random() * tn.bound_size[1],
-                ]
-            )
+        number = 50
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
+                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0], p, False)
         start = time.perf_counter()
         obj = tn.serialize()
         print(f"serialization cost {1000*(time.perf_counter()-start)} ms")
@@ -1119,6 +1139,27 @@ class TreeTest:
         cv2.imshow("New", deserialized.render2())  # pylint: disable=no-member
         cv2.waitKey(0)  # pylint: disable=no-member
 
+    @staticmethod
+    def save_load_test():
+        tn = TreeNode().as_root([0, 0], [50, 50], [1, 1])
+        number = 50
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
+                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0], p, False)
+        start = time.perf_counter()
+        tn.save()
+        print(f"save cost {1000*(time.perf_counter()-start)} ms")
+
+        start = time.perf_counter()
+        loaded = TreeNode.load()
+        print(f"load cost {1000*(time.perf_counter()-start)} ms")
+        cv2.imshow("Raw", tn.render2())  # pylint: disable=no-member
+        cv2.imshow("New", loaded.render2())  # pylint: disable=no-member
+        cv2.waitKey(0)  # pylint: disable=no-member
+
 
 if __name__ == "__main__":
-    TreeTest.serialize_deserialize_test()
+    TreeTest.save_load_test()
