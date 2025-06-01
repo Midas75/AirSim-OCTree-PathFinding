@@ -251,6 +251,7 @@ class TreeNode:
 
     child: dict[int, TreeNode] = None
     state: int
+    dynamic_culling: int = -1
 
     bound_min: list[float]
     bound_max: list[float]
@@ -260,8 +261,8 @@ class TreeNode:
     min_length: list[float]
     parent: TreeNode
     root: TreeNode
-    nodes: dict[int, TreeNode]
 
+    bit_values: list[int] = [1, 2, 4, 8]
     dims: int
     rangel: list[int]
     directions: list[list[bool]]
@@ -287,7 +288,6 @@ class TreeNode:
         if parent is not None:
             self.parent = parent
             self.root = parent.root
-            self.nodes = self.root.nodes
 
             self.dims = parent.dims
             self.rangel = parent.rangel
@@ -318,15 +318,16 @@ class TreeNode:
             _result["bound_min"] = self.bound_min
             _result["bound_max"] = self.bound_max
             _result["nodes"] = dict[str, typing.Any]()
-
-        _result["nodes"][str(self.id)] = info = dict[str, typing.Any]()
-        info["i_bound_min"] = self.i_bound_min
-        info["i_bound_max"] = self.i_bound_max
-        info["i_center"] = self.i_center
-        info["state"] = self.state
-        info["known"] = self.known
-        info["is_leaf"] = self.is_leaf
-        if self.child is not None:
+        if self.is_leaf:
+            if str(self.id) not in _result["nodes"]:
+                info = dict[str, typing.Any]()
+                _result["nodes"][str(self.id)] = info
+                info["i_center"] = self.i_center
+                info["known"] = self.known
+                info["state"] = self.state
+            else:
+                return _result
+        elif self.child is not None:
             for direction in self.child:
                 self.child[direction].serialize(_result)
         return _result
@@ -344,12 +345,14 @@ class TreeNode:
         root = TreeNode().as_root(obj["bound_min"], obj["bound_max"], obj["min_length"])
         for n_id in obj["nodes"]:
             info = obj["nodes"][n_id]
-            if info["is_leaf"]:
-                root.add_i(info["i_center"], info["state"] != TreeNode.FULL)
+            if info["state"] == TreeNode.FULL:
+                root.add_i(info["i_center"])
+                n = root.query_i(info["i_center"])
         for n_id in obj["nodes"]:
             info = obj["nodes"][n_id]
-            node = root.nodes[int(n_id)]
-            node.known = info["known"]
+            n = root.query_i(info["i_center"])
+            if n.id == int(n_id):
+                n.known = info["known"]
         return root
 
     @staticmethod
@@ -359,6 +362,16 @@ class TreeNode:
         with open(path, "rb") as f:
             j = gzip.decompress(f.read()).decode("utf-8")
             return TreeNode.deserialize(json.loads(j))
+
+    def clear(self):
+        if self.child is not None:
+            self.child.clear()
+        self.state = self.EMPTY
+        self.update_state()
+        p = self.parent
+        while p is not None:
+            p.update_state()
+            p = p.parent
 
     def path_smoothing(
         self, path: list[list[float]], expand: list[float] = None
@@ -416,15 +429,14 @@ class TreeNode:
                     f"on dim:{dim}, min_length {self.min_length[dim]} "
                     f"is smaller than bound_size {self.bound_size[dim]}"
                 )
-            self.i_bound_max[dim] = self.i_bound_size[dim] = 2 ** math.ceil(
+            self.i_bound_size[dim] = 2 ** math.ceil(
                 math.log2(dim_ratio)
             )  # assure i_center is int
+            self.i_bound_max[dim] = self.i_bound_size[dim]
             # self.i_bound_min[dim] = 0 # useless
-            self.i_center[dim] = (self.i_bound_max[dim] + self.i_bound_min[dim]) // 2
+            self.i_center[dim] = self.i_bound_max[dim] // 2
         self._min = self.is_min()
         self.id = self.gen_id()
-        self.nodes = dict[int, TreeNode]()
-        self.nodes[self.id] = self
         return self
 
     def update_bound(self):
@@ -439,16 +451,19 @@ class TreeNode:
         for dim in self.rangel:
             self.i_bound_size[dim] = self.i_bound_max[dim] - self.i_bound_min[dim]
             if self.parent is not None:
-                bound_ratio = self.root.bound_max[dim] / self.root.i_bound_max[dim]
-                self.bound_max[dim] = self.i_bound_max[dim] * bound_ratio
-                self.bound_min[dim] = self.i_bound_min[dim] * bound_ratio
+                bound_ratio = self.root.bound_size[dim] / self.root.i_bound_size[dim]
+                self.bound_max[dim] = (
+                    self.i_bound_max[dim] * bound_ratio + self.root.bound_min[dim]
+                )
+                self.bound_min[dim] = (
+                    self.i_bound_min[dim] * bound_ratio + self.root.bound_min[dim]
+                )
             self.bound_size[dim] = self.bound_max[dim] - self.bound_min[dim]
             self.center[dim] = self.bound_max[dim] / 2 + self.bound_min[dim] / 2
             self.i_center[dim] = (self.i_bound_max[dim] + self.i_bound_min[dim]) // 2
 
         self._min = self.is_min()
         self.id = self.gen_id()
-        self.nodes[self.id] = self
 
     def gen_id(self) -> int:
         result = 0
@@ -459,21 +474,24 @@ class TreeNode:
         return result
 
     def divide(self, depth: int = 1) -> None:
-        if depth <= 0:
-            return
         if self._min:
             return
         if self.state != self.EMPTY:
             return
+        if not self.is_leaf:
+            return
+        if depth <= 0:
+            return
         if self.child is None:
             self.child = dict[int, TreeNode]()
+        self.is_leaf = False
         for i, _direction in enumerate(self.directions):
             _r, ri, d = self.get_bound_by_direction(i)
             if ri not in self.child:
                 c = self.__class__(self, i, d)
-                self.child[ri] = self.child[i] = c
+                self.child[ri] = c
+                self.child[i] = c
                 c.divide(depth - 1)
-                self.is_leaf = False
             else:
                 self.child[i] = self.child[ri]
 
@@ -484,7 +502,7 @@ class TreeNode:
         return True
 
     def update_state(self) -> None:
-        if len(self.child) <= 0:
+        if self.child is None or len(self.child) <= 0:
             self.is_leaf = True
             return
         full_counter = 0
@@ -511,9 +529,10 @@ class TreeNode:
         if (not allow_oor) and self.out_of_region(point):
             return -1
         result = 0
+
         for dim in self.rangel:
             if point[dim] > self.center[dim]:
-                result += 2**dim
+                result += self.bit_values[dim]
         return result
 
     def out_of_region(self, point: list[float]) -> bool:
@@ -528,7 +547,7 @@ class TreeNode:
         result = 0
         for dim in self.rangel:
             if point[dim] > self.i_center[dim]:
-                result += 2**dim
+                result += self.bit_values[dim]
         return result
 
     def out_of_region_i(self, point: list[int]) -> bool:
@@ -547,7 +566,7 @@ class TreeNode:
                 reduce = True
                 divide[dim] = False
             elif directions[dim]:
-                index += 2**dim
+                index += self.bit_values[dim]
         return reduce, index, divide
 
     def query(
@@ -565,11 +584,11 @@ class TreeNode:
     def query_i(
         self, point: list[int], nearest_on_oor: bool = False
     ) -> typing.Union[TreeNode, None]:
-        direction = self.get_direction_i(point, nearest_on_oor)
-        if (not nearest_on_oor) and direction < 0:
+        if (not nearest_on_oor) and self.out_of_region_i(point):
             return None
         if self.is_leaf:
             return self
+        direction = self.get_direction_i(point, nearest_on_oor)
         if direction in self.child:
             return self.child[direction].query_i(point, nearest_on_oor)
         return self
@@ -645,7 +664,7 @@ class TreeNode:
         if self.state == self.FULL:
             return self_cross
 
-        if self_cross:
+        if self_cross and self.child is not None:
             for direction in self.child:
                 if self.child[direction].cross(start, inv_vector, expand):
                     return True
@@ -691,51 +710,69 @@ class TreeNode:
 
     def add(
         self, point: list[float], empty: bool = False
-    ) -> typing.Union[TreeNode, None]:
-        if self.state == self.FULL and not empty:
-            return None
-        direction = self.get_direction(point, True)
+    ) -> bool:  # tell if node.state was changed
+        if self.state == self.FULL:
+            if not empty:
+                return False
+            else:
+                return False
+        direction = self.get_direction(point)
         if direction < 0:
-            return None
-        if self.state == self.EMPTY and empty:
-            self.known = True
-            return self
-        if self._min:
-            if (not empty) and self.state != self.FULL:
-                self.state = self.FULL
-                return self
-            return None
+            return False
+        if self.state == self.EMPTY:
+            if empty:
+                if not self.known:
+                    self.known = True
+                    return False
+                else:
+                    return False
+            else:
+                if self._min:
+                    self.state = self.FULL
+                    self.dynamic_culling = -1
+                    return True
+                else:
+                    pass
         self.divide()
-        changed: TreeNode = self.child[direction].add(point, empty)
-        if changed is not None:
+        changed = self.child[direction].add(point, empty)
+        if changed:
             self.update_state()
         return changed
 
-    def add_i(
-        self, point: list[int], empty: bool = False
-    ) -> typing.Union[TreeNode, None]:
-        if self.state == self.FULL and not empty:
-            return None
-        direction = self.get_direction_i(point, True)
+    def add_i(self, point: list[int], empty: bool = False) -> bool:
+        if self.state == self.FULL:
+            if not empty:
+                return False
+            else:
+                return False
+        direction = self.get_direction_i(point)
         if direction < 0:
-            return None
-        if self.state == self.EMPTY and empty:
-            self.known = True
-            return self
-        if self._min:
-            if (not empty) and self.state != self.FULL:
-                self.state = self.FULL
-                return self
-            return None
+            return False
+        if self.state == self.EMPTY:
+            if empty:
+                if not self.known:
+                    self.known = True
+                    return False
+                else:
+                    return False
+            else:
+                if self._min:
+                    self.state = self.FULL
+                    return True
+                else:
+                    pass
         self.divide()
-        changed: TreeNode = self.child[direction].add_i(point, empty)
-        if changed is not None:
+        changed = self.child[direction].add_i(point, empty)
+        if changed:
             self.update_state()
         return changed
 
-    def ray_out_intersect(self, point: list[float], vector: list[float]) -> list[float]:
+    def ray_out_intersect(
+        self, point: list[float], vector: list[float]
+    ) -> tuple[int, list[float]]:
         t_min = -self.INF
         t_max = self.INF
+        out_dim = 0
         for dim in self.rangel:
             if vector[dim] == 0:
                 t1 = self.INF
@@ -750,42 +787,66 @@ class TreeNode:
                 t_near = t1
                 t_far = t2
             if t_max > t_far:
+                out_dim = dim
                 t_max = t_far
             if t_min < t_near:
                 t_min = t_near
         exit_t = t_max
-        return [point[dim] + exit_t * vector[dim] for dim in self.rangel]
+        return out_dim, [point[dim] + exit_t * vector[dim] for dim in self.rangel]
 
     def add_raycast(
-        self, start: list[float], point: list[float], empty_end: bool = False
+        self,
+        start: list[float],
+        point: list[float],
+        empty_end: bool = False,
+        dynamic_culling: int = 20,  # set to negative to disable
+        culling_min_ratio: float = 0.2,
+        culling_max_ratio: float = 0.8,
     ) -> None:
         end = self.add(point, empty_end)
         current = start.copy()
         direction = [point[dim] - start[dim] for dim in self.rangel]
-        ssq = sum([direction[dim] ** 2 for dim in self.rangel])
-
         sign = [0] * self.dims
-        full_zero = True
         for dim in self.rangel:
             if direction[dim] > 0:
                 sign[dim] = 1
-                full_zero = False
             elif direction[dim] < 0:
-                sign[sign] = -1
-                full_zero = False
-        if full_zero:
-            return
-        unit_dir = [
-            direction[dim] / ssq * self.min_length[dim] * sign[dim]
-            for dim in self.rangel
-        ]
+                sign[dim] = -1
+        quit = False
+        visit = set[int]()
         while True:
             cnode = self.query(current)
-            if (cnode is None) or (cnode is end) or (cnode.state != self.EMPTY):
+            if (
+                cnode is None
+                # or cnode.state != cnode.EMPTY
+                or cnode is end
+                or cnode.id in visit
+            ):
                 break
+            need_culling: bool = False
+            for dim in self.rangel:
+                cd = abs(current[dim] - start[dim])
+                ad = abs(direction[dim])
+                if cd > ad:
+                    quit = True
+                    break
+                if cd > culling_min_ratio * ad and cd < culling_max_ratio * ad:
+                    need_culling = True
+            if quit:
+                break
+            if cnode.state != cnode.EMPTY and need_culling and dynamic_culling > 0:
+                if cnode.dynamic_culling < 0:
+                    cnode.dynamic_culling = dynamic_culling
+                else:
+                    cnode.dynamic_culling -= 1
+                if cnode.dynamic_culling == 0:
+                    cnode.clear()
+                    cnode.dynamic_culling = TreeNode.dynamic_culling
+            visit.add(cnode.id)
             self.add(current, empty=True)
-            roi = cnode.ray_out_intersect(start, direction)
-            current = [unit_dir[dim] + roi[dim] for dim in self.rangel]
+            out_dim, current = cnode.ray_out_intersect(start, direction)
+
+            current[out_dim] += self.min_length[out_dim] * sign[out_dim]
 
     def get_neighbor(self) -> set[TreeNode]:
         result = set[TreeNode]()
@@ -797,7 +858,8 @@ class TreeNode:
                     lower[_dim] = self.i_bound_min[_dim] - 1
                     upper[_dim] = self.i_bound_max[_dim] + 1
                 else:
-                    upper[_dim] = lower[_dim] = self.i_center[_dim]
+                    upper[_dim] = self.i_center[_dim]
+                    lower[_dim] = self.i_center[_dim]
             lower_node = self.root.query_i(lower)
             upper_node = self.root.query_i(upper)
             if lower_node is not None:
@@ -912,6 +974,7 @@ class TreeNode:
         show_now: int = -1,
         geometries: list[open3d.geometry.Geometry] = None,
         with_path: list[list[float]] = None,
+        with_coordinate: bool = True,
     ) -> list[open3d.geometry.Geometry]:
         is_root = False
         if geometries is None:
@@ -933,19 +996,21 @@ class TreeNode:
             merge_mesh.remove_duplicated_triangles()
             merge_mesh.compute_vertex_normals()
             geometries = [merge_mesh]
-        if with_path is not None and len(with_path) > 1:
-            conntection = [[i, i + 1] for i in range(len(with_path) - 1)]
-            ls = open3d.geometry.LineSet(
-                open3d.utility.Vector3dVector(with_path),
-                open3d.utility.Vector2iVector(conntection),
-            )
-            ls.paint_uniform_color((1, 0, 0))
-            geometries.append(ls)
-        geometries.append(
-            open3d.geometry.TriangleMesh.create_coordinate_frame(
-                size=max(*self.bound_size)
-            )
-        )
+            if with_coordinate:
+                geometries.append(
+                    open3d.geometry.TriangleMesh.create_coordinate_frame(
+                        size=max(*self.bound_size)
+                    )
+                )
+            if with_path is not None and len(with_path) > 1:
+                conntection = [[i, i + 1] for i in range(len(with_path) - 1)]
+                ls = open3d.geometry.LineSet(
+                    open3d.utility.Vector3dVector(with_path),
+                    open3d.utility.Vector2iVector(conntection),
+                )
+                ls.paint_uniform_color((1, 0, 0))
+                geometries.append(ls)
+
         if show_now >= 0:
             open3d.visualization.draw_geometries(  # pylint: disable=no-member
                 geometries
@@ -988,8 +1053,8 @@ class TreeTest:
     @staticmethod
     def raycast_test():
         tn = TreeNode()
-        tn.as_root([0, 0], [64, 64], [1, 1])
-        number = 50
+        tn.as_root([0, 0], [640, 640], [2, 2])
+        number = 500
         for i in range(number):
             p = [
                 tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
@@ -1096,9 +1161,9 @@ class TreeTest:
 
     @staticmethod
     def octree_test():
-        tn = TreeNode().as_root([0, 0, 0], [10, 10, 10], [1, 1, 1])
+        tn = TreeNode().as_root([-100, -100, -100], [100, 100, 100], [1, 1, 1])
         pg = PathGraph()
-        for _i in range(20):
+        for _i in range(1000):
             tn.add(
                 [
                     1 + random.random() * (tn.bound_size[0] - 1),
@@ -1160,6 +1225,31 @@ class TreeTest:
         cv2.imshow("New", loaded.render2())  # pylint: disable=no-member
         cv2.waitKey(0)  # pylint: disable=no-member
 
+    @staticmethod
+    def dynamic_culling_test():
+        tn = TreeNode().as_root([0, 0], [50, 50], [0.25, 0.25])
+        number = 500
+        moving_obstacle = [10, 0]
+        obstacle_size = 2
+        moving_speed = 0.5
+        for _ in range(number):
+            print(_)
+            moving_obstacle[1] += moving_speed
+            if moving_obstacle[1] > 50:
+                moving_obstacle[1] = 0
+            for i in range(number):
+                p = [
+                    30,
+                    tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+                ]
+                if (
+                    p[1] > moving_obstacle[1] - obstacle_size / 2
+                    and p[1] < moving_obstacle[1] + obstacle_size / 2
+                ):
+                    p[0] = moving_obstacle[0]
+                tn.add_raycast([0, p[1]], p, False)
+            tn.render2(show_now=0)
+
 
 if __name__ == "__main__":
-    TreeTest.save_load_test()
+    TreeTest.dynamic_culling_test()
