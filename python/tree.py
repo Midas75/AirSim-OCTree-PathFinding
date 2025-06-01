@@ -433,7 +433,7 @@ class TreeNode:
                 math.log2(dim_ratio)
             )  # assure i_center is int
             self.i_bound_max[dim] = self.i_bound_size[dim]
-            # self.i_bound_min[dim] = 0 # useless
+            self.i_bound_min[dim] = 0
             self.i_center[dim] = self.i_bound_max[dim] // 2
         self._min = self.is_min()
         self.id = self.gen_id()

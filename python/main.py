@@ -65,9 +65,10 @@ def fly_to(
     direction = [target[i] - current[i] for i in range(3)]
     direction = fusion_detection.normalize(direction)
     target_forward = fusion_detection.normalize((direction[0], 0, direction[2]))
-    yaw_offset = math.acos(
+    cross_product = (
         target_forward[0] * current_forward[0] + target_forward[2] * current_forward[2]
     )
+    yaw_offset = math.acos(min(max(cross_product, -1), 1))
     yaw_offset = math.degrees(yaw_offset)
     if (
         target_forward[0] * current_forward[2] - target_forward[2] * current_forward[0]
@@ -89,7 +90,7 @@ def fly_to(
         if not p[-1]:
             all_points.append((p[0], p[1], p[2]))
             all_colors.append(c)
-        root.add_raycast(list(current), [p[0], p[1], p[2]], p[-1])
+        root.add_raycast(list(current), [p[0], p[1], p[2]], p[-1], dynamic_culling=256)
     current_node = root.query(current, True)
     target_node = root.query(target, True)
     if current_node.state != root.EMPTY:
@@ -150,19 +151,19 @@ if __name__ == "__main__":
     ac.moveToZAsync(-10, velocity=5).join()
     dr = drone_request.DroneRequestClient()
     pg = PathGraph()
-    x = 500
-    y = 100
-    z = 500
-    # x = 100
-    # y = 12
-    # z = 100
+    # x = 500
+    # y = 100
+    # z = 500
+    x = 100
+    y = 12
+    z = 100
     ml = [2, 2, 2]
     if os.path.exists("TreeNode.json.gz"):
         root = TreeNode.load("TreeNode.json.gz")
     else:
         root = TreeNode().as_root([-x, 1, -z], [x, y, z], ml)
-    target = (-297, 12.65, 246.5)
-    # target = (71, 12, 83)
+    # target = (-297, 12.65, 246.5)
+    target = (71, 12, 83)
     start = time.perf_counter()
     print("first updating...")
     pg.update(root)
@@ -179,10 +180,10 @@ if __name__ == "__main__":
             path = getPath(root, pg, position, target)
             if len(path) <= 2:
                 pass
-                fusion_detection.renderPointCloud(
-                    all_points + all_paths, all_colors + all_path_colors
-                )
-                root.render3(with_coordinate=False, show_now=0)
+                # fusion_detection.renderPointCloud(
+                #     all_points + all_paths, all_colors + all_path_colors
+                # )
+                # root.render3(with_coordinate=False, show_now=0)
             currentIndex = 1
             continue
         if reach:
