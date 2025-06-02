@@ -94,7 +94,7 @@ def fly_to(
     current_node = root.query(current, True)
     target_node = root.query(target, True)
     if current_node.state != root.EMPTY:
-        current_node.clear()
+        current_node.clear_as()
     if target_node.state != root.EMPTY:
         result = False
         print(f"cannot fly to {target} because it is not empty:{target_node.center}")

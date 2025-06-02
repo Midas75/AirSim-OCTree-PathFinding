@@ -115,9 +115,9 @@ class PathGraph:
             return
 
         if root is not self.last_root:
-            self.last_leaves = set[TreeNode]()
+            self.last_leaves.clear()
             self.edges.clear()
-
+            self.nodes.clear()
         now_leaves = self.get_empty_leaves(root)
         now_ids = {leaf.id for leaf in now_leaves}
         expire_ids = [id for id in self.nodes if id not in now_ids]
@@ -221,10 +221,10 @@ class PathGraph:
                 neighbor: PathNode = e.b if e.a == current else e.a
                 if neighbor in close_set:
                     continue
-                g_score = current.g + current.distance(neighbor)
+                g_score = current.g + current.distance(neighbor, unknown_penalty)
                 if g_score < neighbor.g or neighbor not in open_set:
                     neighbor.g = g_score
-                    neighbor.h = neighbor.distance(end)
+                    neighbor.h = neighbor.distance(end, unknown_penalty)
                     neighbor.f = neighbor.g + neighbor.h
                     neighbor.from_node = current
                     open_set.add(neighbor)
@@ -362,16 +362,6 @@ class TreeNode:
         with open(path, "rb") as f:
             j = gzip.decompress(f.read()).decode("utf-8")
             return TreeNode.deserialize(json.loads(j))
-
-    def clear(self):
-        if self.child is not None:
-            self.child.clear()
-        self.state = self.EMPTY
-        self.update_state()
-        p = self.parent
-        while p is not None:
-            p.update_state()
-            p = p.parent
 
     def path_smoothing(
         self, path: list[list[float]], expand: list[float] = None
@@ -803,7 +793,8 @@ class TreeNode:
         culling_min_ratio: float = 0.2,
         culling_max_ratio: float = 0.8,
     ) -> None:
-        end = self.add(point, empty_end)
+        self.add(point, empty_end)
+        end = self.query(point)
         current = start.copy()
         direction = [point[dim] - start[dim] for dim in self.rangel]
         sign = [0] * self.dims
