@@ -18,7 +18,7 @@ namespace ctree
 #define for_dims(_this) for (int dim = 0; dim < _this->dims; dim++)
 
     constexpr int8_t TREE_CHILDS = 1 << TREE_DIM;
-    constexpr const float ZEROS[TREE_DIM] = {0};
+    constexpr std::array<float, TREE_DIM> ZEROS = {0};
     class TreeNode : public std::enable_shared_from_this<TreeNode>
     {
     public:
@@ -39,21 +39,20 @@ namespace ctree
         int8_t state;
         int dynamic_culling = -1;
 
-        float bound_min[TREE_DIM] = {0},
-              bound_max[TREE_DIM] = {0},
-              bound_size[TREE_DIM] = {0},
-              center[TREE_DIM] = {0},
-              min_length[TREE_DIM] = {0};
+        std::array<float, TREE_DIM> bound_min = {0},
+                                    bound_max = {0},
+                                    bound_size = {0},
+                                    center = {0},
+                                    min_length = {0};
         TreeNode *parent = nullptr, *root = nullptr;
         int8_t dims;
         int8_t directions;
 
         bool _min = false, is_leaf = true, known = false;
-
-        int i_bound_min[TREE_DIM] = {0},
-            i_bound_max[TREE_DIM] = {0},
-            i_bound_size[TREE_DIM] = {0},
-            i_center[TREE_DIM] = {0};
+        std::array<int, TREE_DIM> i_bound_min = {0},
+                                  i_bound_max = {0},
+                                  i_bound_size = {0},
+                                  i_center = {0};
         long id;
 
         TreeNode(TreeNode *parent = nullptr,
@@ -72,7 +71,7 @@ namespace ctree
 
                 this->dims = parent->dims;
                 this->directions = 1 << this->dims;
-                memcpy(this->min_length, parent->min_length, TREE_DIM);
+                this->min_length = parent->min_length;
                 int8_t _divide = divide, _direction = direction;
                 for_dims(this)
                 {
@@ -99,15 +98,14 @@ namespace ctree
         }
         void update_bound()
         {
-            memset(this->center, 0, sizeof(this->center));
-            memset(this->i_center, 0, sizeof(this->i_center));
-
+            this->center.fill(0);
+            this->i_center.fill(0);
             if (this->parent != nullptr)
             {
-                memset(this->bound_max, 0, sizeof(this->bound_max));
-                memset(this->bound_min, 0, sizeof(this->bound_min));
-                memset(this->bound_size, 0, sizeof(this->bound_size));
-                memset(this->i_bound_size, 0, sizeof(this->i_bound_size));
+                this->bound_max.fill(0);
+                this->bound_min.fill(0);
+                this->bound_size.fill(0);
+                this->i_bound_size.fill(0);
             }
             for_dims(this)
             {
@@ -148,18 +146,19 @@ namespace ctree
             return result;
         }
         ConstPtr as_root(
-            const float bound_min[], const float bound_max[],
-            const float min_length[], const int dims = TREE_DIM)
+            const std::array<float, TREE_DIM> &bound_min,
+            const std::array<float, TREE_DIM> &bound_max,
+            const std::array<float, TREE_DIM> &min_length,
+            const int dims = TREE_DIM)
         {
-            size_t dim_size_f = sizeof(float) * dims;
             this->dims = dims;
             this->directions = 1 << this->dims;
             this->root = this;
             this->parent = nullptr;
 
-            memcpy(this->min_length, min_length, dim_size_f);
-            memcpy(this->bound_min, bound_min, dim_size_f);
-            memcpy(this->bound_max, bound_max, dim_size_f);
+            this->min_length = min_length;
+            this->bound_max = bound_max;
+            this->bound_min = bound_min;
 
             for_dims(this)
             {
@@ -277,7 +276,7 @@ namespace ctree
             }
             return {index, divide};
         }
-        int8_t get_direction(const float point[], const bool allow_oor = false) const
+        int8_t get_direction(const std::array<float, TREE_DIM> &point, const bool allow_oor = false) const
         {
             if ((!allow_oor) && (this->out_of_region(point)))
             {
@@ -293,7 +292,7 @@ namespace ctree
             }
             return result;
         }
-        bool out_of_region(const float point[]) const
+        bool out_of_region(const std::array<float, TREE_DIM> &point) const
         {
             for_dims(this)
             {
@@ -305,7 +304,7 @@ namespace ctree
             }
             return false;
         }
-        int8_t get_direction_i(const int point[], const bool allow_oor = false) const
+        int8_t get_direction_i(const std::array<int, TREE_DIM> &point, const bool allow_oor = false) const
         {
             if ((!allow_oor) && (this->out_of_region_i(point)))
             {
@@ -321,7 +320,7 @@ namespace ctree
             }
             return result;
         }
-        bool out_of_region_i(const int point[]) const
+        bool out_of_region_i(const std::array<int, TREE_DIM> &point) const
         {
             for_dims(this)
             {
@@ -334,7 +333,7 @@ namespace ctree
             return false;
         }
         ConstPtr query(
-            const float point[],
+            const std::array<float, TREE_DIM> &point,
             bool nearest_on_oor = false)
         {
             if ((!nearest_on_oor) && this->out_of_region(point))
@@ -356,7 +355,7 @@ namespace ctree
             return shared_from_this();
         }
         ConstPtr query_i(
-            const int point[],
+            const std::array<int, TREE_DIM> &point,
             bool nearest_on_oor = false)
         {
             if ((!nearest_on_oor) && this->out_of_region_i(point))
@@ -411,7 +410,9 @@ namespace ctree
                 return p1->shared_from_this();
             }
         }
-        bool cross_self(const float start[], const float inv_vector[], const float expand[]) const
+        bool cross_self(const std::array<float, TREE_DIM> &start,
+                        const std::array<float, TREE_DIM> &inv_vector,
+                        const std::array<float, TREE_DIM> &expand) const
         {
             float tmin = -TreeNode::INF;
             float tmax = TreeNode::INF;
@@ -438,7 +439,9 @@ namespace ctree
             }
             return tmax >= 0 && tmin <= 1;
         }
-        bool cross(const float start[], const float inv_vector[], const float expand[]) const
+        bool cross(const std::array<float, TREE_DIM> &start,
+                   const std::array<float, TREE_DIM> &inv_vector,
+                   const std::array<float, TREE_DIM> &expand) const
         {
             if (this->state == TreeNode::EMPTY)
             {
@@ -465,13 +468,13 @@ namespace ctree
             return false;
         }
         bool cross_lca(
-            const float start[],
-            const float end[],
-            const float expand[] = ZEROS)
+            const std::array<float, TREE_DIM> &start,
+            const std::array<float, TREE_DIM> &end,
+            const std::array<float, TREE_DIM> &expand = ZEROS)
         {
             auto n1 = this->query(start, true);
             auto n2 = this->query(end, true);
-            float inv_vector[TREE_DIM] = {0};
+            std::array<float, TREE_DIM> inv_vector = {0};
             for_dims(this)
             {
                 float v = end[dim] - start[dim];
@@ -524,7 +527,7 @@ namespace ctree
             }
             return true;
         }
-        bool add(const float point[], bool empty = false)
+        bool add(const std::array<float, TREE_DIM> &point, bool empty = false)
         {
             if (this->state == TreeNode::FULL)
             {
@@ -577,7 +580,7 @@ namespace ctree
             }
             return changed;
         }
-        bool add_i(const int point[], bool empty = false)
+        bool add_i(const std::array<int, TREE_DIM> &point, bool empty = false)
         {
             if (this->state == TreeNode::FULL)
             {
@@ -630,7 +633,10 @@ namespace ctree
             }
             return changed;
         }
-        int8_t ray_out_intersect(const float point[], const float vector[], float out[]) const
+        int8_t ray_out_intersect(
+            const std::array<float, TREE_DIM> &point,
+            const std::array<float, TREE_DIM> &vector,
+            std::array<float, TREE_DIM> &out) const
         {
             float t_min = -TreeNode::INF;
             float t_max = TreeNode::INF;
@@ -664,14 +670,18 @@ namespace ctree
             }
             return out_dim;
         }
-        void add_raycast(const float start[], const float point[], bool empty_end = false,
-                         int dynamic_culling = 20, float culling_min_ratio = 0.2, float culling_max_ratio = 0.8)
+        void add_raycast(const std::array<float, TREE_DIM> &start,
+                         const std::array<float, TREE_DIM> &point,
+                         bool empty_end = false,
+                         int dynamic_culling = 20,
+                         float culling_min_ratio = 0.2,
+                         float culling_max_ratio = 0.8)
         {
             this->add(point, empty_end);
             auto end = this->query(point);
-            float current[TREE_DIM], direction[TREE_DIM] = {0};
+            std::array<float, TREE_DIM> current = start;
+            std::array<float, TREE_DIM> direction = {0};
             int8_t sign[TREE_DIM] = {0};
-            memcpy(current, start, sizeof(current));
             for_dims(this)
             {
                 direction[dim] = point[dim] - start[dim];
@@ -738,7 +748,7 @@ namespace ctree
         }
         void get_neighbor(std::unordered_map<long, ConstPtr> &out_map) const
         {
-            int lower[TREE_DIM] = {0}, upper[TREE_DIM] = {0};
+            std::array<int, TREE_DIM> lower = {0}, upper = {0};
             for_dims(this)
             {
                 for (int _dim = 0; _dim < this->dims; _dim++)
@@ -783,7 +793,7 @@ namespace ctree
             result |= 1;
             return result;
         }
-        bool contact_center(ConstPtrRef other, std::array<float, TREE_DIM> out_center) const
+        bool contact_center(ConstPtrRef other, std::array<float, TREE_DIM> &out_center) const
         {
             auto cw = this->contact_with(other);
             if (!(cw & 1))
@@ -820,7 +830,7 @@ namespace ctree
         bool path_smoothing(
             const std::vector<std::array<float, TREE_DIM>> &path,
             std::vector<std::array<float, TREE_DIM>> &out_path,
-            const float expand[] = ZEROS)
+            const std::array<float, TREE_DIM> &expand = ZEROS)
         {
             bool changed = false;
             if (path.size() <= 2)
@@ -836,7 +846,7 @@ namespace ctree
                 int j = size_1;
                 while (j > i + 1)
                 {
-                    if (!this->cross_lca(path[i].data(), path[j].data(), expand))
+                    if (!this->cross_lca(path[i], path[j], expand))
                     {
                         changed = true;
                         break;
@@ -1083,7 +1093,10 @@ namespace ctree
             }
             std::reverse(path_list.begin(), path_list.end());
         }
-        void get_path(TreeNode::ConstPtrRef tree_start, TreeNode::ConstPtrRef tree_end, std::vector<std::shared_ptr<PathNode>> &out_path, bool unknown_penalty = true)
+        void get_path(TreeNode::ConstPtrRef tree_start,
+                      TreeNode::ConstPtrRef tree_end,
+                      std::vector<std::shared_ptr<PathNode>> &out_path,
+                      bool unknown_penalty = true)
         {
             out_path.clear();
             auto start = this->find_node(tree_start);
@@ -1147,7 +1160,9 @@ namespace ctree
             }
             return;
         }
-        void interpolation_center(const std::vector<std::shared_ptr<PathNode>> &path, std::vector<std::array<float, TREE_DIM>> &out_path) const
+        void interpolation_center(
+            const std::vector<std::shared_ptr<PathNode>> &path,
+            std::vector<std::array<float, TREE_DIM>> &out_path) const
         {
             out_path.clear();
             if (path.size() <= 0)

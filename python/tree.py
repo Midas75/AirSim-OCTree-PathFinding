@@ -1051,7 +1051,9 @@ class TreeTest:
                 tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
                 tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
             ]
+            start = time.perf_counter()
             tn.add_raycast([0, 0], p, False)
+            print(f"add_raycast cost {1000*(time.perf_counter()-start)} ms")
             tn.render2(show_now=0)
 
     @staticmethod
@@ -1241,6 +1243,20 @@ class TreeTest:
                 tn.add_raycast([0, p[1]], p, False)
             tn.render2(show_now=0)
 
+    @staticmethod
+    def raycast_benchmark_test():
+        tn = TreeNode().as_root([0, 0], [640, 640], [2, 2])
+        number = 501
+        for i in range(number):
+            if i == 1:
+                start = time.perf_counter()
+            p = [
+                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
+                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0], p, False)
+        print(f"add_raycast {number-1} times cost {1000*(time.perf_counter()-start)} ms")
+
 
 if __name__ == "__main__":
-    TreeTest.dynamic_culling_test()
+    TreeTest.raycast_benchmark_test()
