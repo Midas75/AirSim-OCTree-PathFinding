@@ -362,7 +362,7 @@ class CTreeNodeTest:
 
     @staticmethod
     def memory_safety_test():
-        test_number = 5000
+        test_number = 10000
         rest_check = 5000
         rest_interval_ms = 1
         mem_mb = [0] * (test_number + rest_check)
@@ -379,11 +379,10 @@ class CTreeNodeTest:
             tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
             for i in range(number):
                 tn.add_raycast([0, 0], ps[i], False)
-            gc.collect()
             mem_mb[t] = process.memory_info().rss / 1024 / 1024
+        gc.collect()
         for r in tqdm.tqdm(range(rest_check)):
             time.sleep(rest_interval_ms/1000)
-            gc.collect()
             mem_mb[test_number + r] = process.memory_info().rss / 1024 / 1024
         plt.plot(list(range(test_number+rest_check)), mem_mb)
         plt.xlabel("Test number")
