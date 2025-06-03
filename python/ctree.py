@@ -8,12 +8,23 @@ import math
 import numpy
 import cv2
 import cppyy
+import gc
+
+try:
+    import tqdm
+    import matplotlib.pyplot as plt
+    import psutil
+except Exception as e:
+    print(f"[{e}] Import test related modules failed!")
+C_TREE_DIM = 3
+CACHE_C_TREE_PROPS = True
 
 
-def init_ctree(c_tree_dim: int = 3):
+def init_ctree(c_tree_dim: int = 3, cache_c_tree_props: bool = True):
     start = time.perf_counter()
-    global C_TREE_DIM
+    global C_TREE_DIM, CACHE_C_TREE_PROPS
     C_TREE_DIM = c_tree_dim
+    CACHE_C_TREE_PROPS = cache_c_tree_props
     cppyy.cppdef(f"#define TREE_DIM {C_TREE_DIM}")
     cppyy.include(f"{os.path.dirname(__file__)}/ctree.hpp")
     print(f"include cost {1000*(time.perf_counter()-start)} ms")
@@ -52,12 +63,23 @@ class CTreeNodeChildWrapper:
 
 class CTreeNode:
     _c: object
+    _i_bound_max: list[int] = None
+    _i_bound_min: list[int] = None
+    _i_bound_size: list[int] = None
+    _i_center: list[int] = None
+    _bound_max: list[float] = None
+    _bound_min: list[float] = None
+    _bound_size: list[float] = None
+    _center: list[float] = None
+    _dims: int = None
+    _ctncw: CTreeNodeChildWrapper = None
 
     def __init__(self, _c: object = None):
         if _c is None:
             self._c = cppyy.gbl.std.make_shared[cppyy.gbl.ctree.TreeNode]()
         else:
             self._c = _c
+        self._ctncw = CTreeNodeChildWrapper(self)
 
     def as_root(
         self, bound_min: list[float], bound_max: list[float], min_length: list[float]
@@ -106,27 +128,69 @@ class CTreeNode:
 
     @property
     def i_center(self) -> list[int]:
-        return list(self._c.i_center)
+        if (not CACHE_C_TREE_PROPS) or (self._i_center is None):
+            self._i_center = list(self._c.i_center)
+        return self._i_center
 
     @property
     def i_bound_size(self) -> list[int]:
-        return list(self._c.i_bound_size)
+        if (not CACHE_C_TREE_PROPS) or (self._i_bound_size is None):
+            self._i_bound_size = list(self._c.i_bound_size)
+        return self._i_bound_size
 
     @property
     def i_bound_max(self) -> list[int]:
-        return list(self._c.i_bound_max)
+        if (not CACHE_C_TREE_PROPS) or (self._i_bound_max is None):
+            self._i_bound_max = list(self._c.i_bound_max)
+        return self._i_bound_max
 
     @property
     def i_bound_min(self) -> list[int]:
-        return list(self._c.i_bound_min)
+        if (not CACHE_C_TREE_PROPS) or (self._i_bound_min is None):
+            self._i_bound_min = list(self._c.i_bound_min)
+        return self._i_bound_min
+
+    @property
+    def center(self) -> list[float]:
+        if (not CACHE_C_TREE_PROPS) or (self._center is None):
+            self._center = list(self._c.center)
+        return self._center
 
     @property
     def bound_size(self) -> list[float]:
-        return list(self._c.bound_size)
+        if (not CACHE_C_TREE_PROPS) or (self._bound_size is None):
+            self._bound_size = list(self._c.bound_size)
+        return self._bound_size
+
+    @property
+    def bound_max(self) -> list[float]:
+        if (not CACHE_C_TREE_PROPS) or (self._bound_max is None):
+            self._bound_max = list(self._c.bound_max)
+        return self._bound_max
+
+    @property
+    def bound_min(self) -> list[float]:
+        if (not CACHE_C_TREE_PROPS) or (self._bound_min is None):
+            self._bound_min = list(self._c.bound_min)
+        return self._bound_min
 
     @property
     def dims(self) -> int:
-        return self._c.dims
+        if (not CACHE_C_TREE_PROPS) or (self._dims is None):
+            self._dims = self._c.dims
+        return self._dims
+
+    @property
+    def FULL(self) -> int:
+        return cppyy.gbl.ctree.TreeNode.FULL
+
+    @property
+    def EMPTY(self) -> int:
+        return cppyy.gbl.ctree.TreeNode.EMPTY
+
+    @property
+    def HALF_FULL(self) -> int:
+        return cppyy.gbl.ctree.TreeNode.HALF_FULL
 
     @property
     def state(self) -> int:
@@ -144,27 +208,7 @@ class CTreeNode:
     def child(self) -> typing.Union[None, CTreeNodeChildWrapper]:
         if self._c.no_child:
             return None
-        return CTreeNodeChildWrapper(self)
-
-    @property
-    def bound_max(self) -> list[float]:
-        return list(self._c.bound_max)
-
-    @property
-    def bound_min(self) -> list[float]:
-        return list(self._c.bound_min)
-
-    @property
-    def FULL(self) -> int:
-        return cppyy.gbl.ctree.TreeNode.FULL
-
-    @property
-    def EMPTY(self) -> int:
-        return cppyy.gbl.ctree.TreeNode.EMPTY
-
-    @property
-    def HALF_FULL(self) -> int:
-        return cppyy.gbl.ctree.TreeNode.HALF_FULL
+        return self._ctncw
 
     def render2(
         self,
@@ -266,10 +310,24 @@ class CTreeNodeTest:
 
     @staticmethod
     def render2_test():
-        tn = CTreeNode().as_root([0, 0], [50, 50], [1, 1])
+        tn = CTreeNode().as_root([0, 0], [50, 50], [2, 2])
         tn.add([1, 1])
         tn.add([30, 30])
         tn.render2(show_now=0)
+
+    @staticmethod
+    def render2_benchmark_test():
+        tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
+        number = 500
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
+                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0], p, False)
+            start = time.perf_counter()
+            tn.render2(show_now=-1)
+            print(f"render2 cost {1000*(time.perf_counter()-start)} ms")
 
     @staticmethod
     def raycast_test():
@@ -302,7 +360,38 @@ class CTreeNodeTest:
             f"add_raycast {number-1} times cost {1000*(time.perf_counter()-start)} ms"
         )
 
+    @staticmethod
+    def memory_safety_test():
+        test_number = 5000
+        rest_check = 5000
+        rest_interval_ms = 1
+        mem_mb = [0] * (test_number + rest_check)
+        process = psutil.Process(os.getpid())
+        number = 500
+        ps = [
+            [
+                640 * math.sin(math.pi / 2 * i / number),
+                640 * math.cos(math.pi / 2 * i / number),
+            ]
+            for i in range(number)
+        ]
+        for t in tqdm.tqdm(range(test_number)):
+            tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
+            for i in range(number):
+                tn.add_raycast([0, 0], ps[i], False)
+            gc.collect()
+            mem_mb[t] = process.memory_info().rss / 1024 / 1024
+        for r in tqdm.tqdm(range(rest_check)):
+            time.sleep(rest_interval_ms/1000)
+            gc.collect()
+            mem_mb[test_number + r] = process.memory_info().rss / 1024 / 1024
+        plt.plot(list(range(test_number+rest_check)), mem_mb)
+        plt.xlabel("Test number")
+        plt.ylabel("Memory (MB)")
+        plt.show()
+
 
 if __name__ == "__main__":
     init_ctree()
-    CTreeNodeTest.raycast_benchmark_test()
+    # CTreeNodeTest.raycast_benchmark_test()
+    CTreeNodeTest.memory_safety_test()
