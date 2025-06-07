@@ -1,10 +1,16 @@
+# pylint: disable=C0114  # I'm lazy
+# pylint: disable=C0115  # I'm lazy
+# pylint: disable=C0116  # I'm lazy
+# pylint: disable=C0302  # I'm long
 from __future__ import annotations
 
 import os
-from typing import Union, Iterator, Literal
+from typing import Union, Iterator, Literal, Any
 from time import perf_counter, sleep
 from math import sin, cos, pi
 import gc
+import json
+import gzip
 
 from numpy import ones, ndarray, uint8
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
@@ -18,27 +24,32 @@ except ModuleNotFoundError as e:
     print(f"[{e}] Import test related modules failed!")
 C_TREE_DIM = 3
 CACHE_C_TREE_PROPS = True
-_f_std_array = None
-_i_std_array = None
-_treenode_std_vector = None
-_farray_std_vector = None
-_ll_std_pair = None
+_F_STD_ARRAY = None
+_I_STD_ARRAY = None
+_TREENODE_STD_VECTOR = None
+_FARRAY_STD_VECTOR = None
+_LL_STD_PAIR = None
+
+_TREENODE_DATA_STD_VECTOR = None
 
 
 def init_ctree(
     c_tree_dim: int = 3, cache_c_tree_props: bool = True, warm_up: bool = True
 ):
     start = perf_counter()
-    global C_TREE_DIM, CACHE_C_TREE_PROPS, _f_std_array, _i_std_array, _treenode_std_vector, _farray_std_vector, _ll_std_pair  # pylint: disable=global-statement
+    global C_TREE_DIM, CACHE_C_TREE_PROPS  # pylint: disable=global-statement
+    global _F_STD_ARRAY, _I_STD_ARRAY, _TREENODE_STD_VECTOR, _FARRAY_STD_VECTOR, _LL_STD_PAIR  # pylint: disable=global-statement
+    global _TREENODE_DATA_STD_VECTOR  # pylint: disable=global-statement
     C_TREE_DIM = c_tree_dim
     CACHE_C_TREE_PROPS = cache_c_tree_props
     cppdef(f"#define TREE_DIM {C_TREE_DIM}")
     include(f"{os.path.dirname(__file__)}/../ctree/ctree.hpp")
-    _f_std_array = gbl.std.array["float", C_TREE_DIM]
-    _i_std_array = gbl.std.array["int", C_TREE_DIM]
-    _treenode_std_vector = gbl.std.vector[gbl.ctree.TreeNode.Ptr]
-    _farray_std_vector = gbl.std.vector[_f_std_array]
-    _ll_std_pair = gbl.std.pair["long", "long"]
+    _F_STD_ARRAY = gbl.std.array["float", C_TREE_DIM]
+    _I_STD_ARRAY = gbl.std.array["int", C_TREE_DIM]
+    _TREENODE_STD_VECTOR = gbl.std.vector[gbl.ctree.TreeNode.Ptr]
+    _FARRAY_STD_VECTOR = gbl.std.vector[_F_STD_ARRAY]
+    _LL_STD_PAIR = gbl.std.pair["long", "long"]
+    _TREENODE_DATA_STD_VECTOR = gbl.std.vector[gbl.ctree.TreeNodeData]
     print(f"init cost {1000*(perf_counter()-start)} ms")
     if warm_up:
         start = perf_counter()
@@ -49,23 +60,23 @@ def init_ctree(
 def farray(l: list[float]) -> object:
     lenl = len(l)
     if lenl == C_TREE_DIM:
-        return _f_std_array(l)
+        return _F_STD_ARRAY(l)
     if lenl > C_TREE_DIM:
-        return _f_std_array(l[:C_TREE_DIM])
-    return _f_std_array(l + [0] * (C_TREE_DIM - lenl))
+        return _F_STD_ARRAY(l[:C_TREE_DIM])
+    return _F_STD_ARRAY(l + [0] * (C_TREE_DIM - lenl))
 
 
 def iarray(l: list[int]) -> object:
     lenl = len(l)
     if lenl == C_TREE_DIM:
-        return _i_std_array(l)
+        return _I_STD_ARRAY(l)
     if lenl > C_TREE_DIM:
-        return _i_std_array(l[:C_TREE_DIM])
-    return _i_std_array(l + [0] * (C_TREE_DIM - lenl))
+        return _I_STD_ARRAY(l[:C_TREE_DIM])
+    return _I_STD_ARRAY(l + [0] * (C_TREE_DIM - lenl))
 
 
 def llpair(ll: tuple[int, int]) -> object:
-    return _ll_std_pair(*ll)
+    return _LL_STD_PAIR(*ll)
 
 
 class CTreeNodeChildWrapper:
@@ -131,6 +142,7 @@ class CTreeNode:
         tn.add([50] * C_TREE_DIM)
         tn.add_i([0] * C_TREE_DIM)
         tn.add_raycast([0] * C_TREE_DIM, [100] * C_TREE_DIM)
+        tn.serialize()
         _ = (
             tn.bound_max,
             tn.bound_min,
@@ -153,6 +165,50 @@ class CTreeNode:
         else:
             self._c = _c
         self._ctncw = CTreeNodeChildWrapper(self)
+
+    def serialize(self, _result: dict[str, Any] = None) -> dict[str, Any]:
+        if _result is not None:
+            _result.clear()
+        else:
+            _result = dict[str,Any]()
+        td = gbl.ctree.TreeData()
+        tnd = _TREENODE_DATA_STD_VECTOR()
+        self._c.serialize(td, tnd)
+        dims = td.dims
+        _result["min_length"] = [0] * dims
+        _result["bound_min"] = [0] * dims
+        _result["bound_max"] = [0] * dims
+        for dim in range(dims):
+            _result["min_length"][dim] = td.min_length[dim]
+            _result["bound_min"][dim] = td.bound_min[dim]
+            _result["bound_max"][dim] = td.bound_max[dim]
+        _result["nodes"] = dict[str, Any]()
+        tndl = list(tnd)
+        for item in tndl:
+            info = dict[str, Any]()
+            info["i_bound_min"] = [0] * dims
+            info["i_bound_max"] = [0] * dims
+            for dim in range(dims):
+                info["i_bound_min"][dim] = item.i_bound_min[dim]
+                info["i_bound_max"][dim] = item.i_bound_max[dim]
+            info["state"] = item.state
+            info["known"] = bool(item.known)
+            info["is_leaf"] = bool(item.is_leaf)
+            info["child"] = dict[str, int]()
+            for i in range(2**dims):
+                if item.child[i] == 0:
+                    continue
+                info["child"][str(i)] = item.child[i]
+            _result["nodes"][str(item.id)] = info
+        return _result
+
+    def save(self, path: str = None) -> None:
+        if path is None:
+            path = f"{self.__class__.__name__}.json.gz"
+        with open(path, "wb") as f:
+            j = json.dumps(self.serialize())
+            gz = gzip.compress(j.encode("utf-8"))
+            f.write(gz)
 
     def as_root(
         self, bound_min: list[float], bound_max: list[float], min_length: list[float]
@@ -205,8 +261,8 @@ class CTreeNode:
     def path_smoothing(
         self, path: list[list[float]], expand: list[float] = None
     ) -> tuple[bool, list[list[float]]]:
-        fsv = _farray_std_vector([farray(item) for item in path])
-        o_path = _farray_std_vector()
+        fsv = _FARRAY_STD_VECTOR([farray(item) for item in path])
+        o_path = _FARRAY_STD_VECTOR()
         if expand is None:
             changed = self._c.path_smoothing(fsv, o_path)
         else:
@@ -274,15 +330,15 @@ class CTreeNode:
         return self._dims
 
     @property
-    def FULL(self) -> int:
+    def FULL(self) -> int:  # pylint: disable=C0103
         return gbl.ctree.TreeNode.FULL
 
     @property
-    def EMPTY(self) -> int:
+    def EMPTY(self) -> int:  # pylint: disable=C0103
         return gbl.ctree.TreeNode.EMPTY
 
     @property
-    def HALF_FULL(self) -> int:
+    def HALF_FULL(self) -> int:  # pylint: disable=C0103
         return gbl.ctree.TreeNode.HALF_FULL
 
     @property
@@ -419,7 +475,7 @@ class CPathGraph:
     def get_path(
         self, tree_start: CTreeNode, tree_end: CTreeNode, unknown_penalty: bool = True
     ) -> list[CTreeNode]:
-        std_vector = _treenode_std_vector()
+        std_vector = _TREENODE_STD_VECTOR()
         self._c.get_path(
             tree_start._c,  # pylint: disable=protected-access
             tree_end._c,  # pylint: disable=protected-access
@@ -431,10 +487,10 @@ class CPathGraph:
     def interpolation_center(self, path: list[CTreeNode]) -> list[list[float]]:
         if len(path) < 1:
             return []
-        fsv = _farray_std_vector()
-        tsv = _treenode_std_vector(
-            [p._c for p in path]
-        )  # pylint: disable=protected-access
+        fsv = _FARRAY_STD_VECTOR()
+        tsv = _TREENODE_STD_VECTOR(
+            [p._c for p in path]  # pylint: disable=protected-access
+        )
         dims = path[0].dims
         self._c.interpolation_center(tsv, fsv)
         return [list(item)[:dims] for item in fsv]
@@ -590,7 +646,22 @@ class CTreeNodeTest:
         print(s_path)
         tn.render2(show_now=0, with_graph=pg, with_path=s_path)
 
+    @staticmethod
+    def save_test():
+        tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
+        number = 500
+
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0], p, False)
+        start = perf_counter()
+        tn.save()
+        print(f"save cost {1000*(perf_counter()-start)} ms")
+
 
 if __name__ == "__main__":
     init_ctree()
-    CTreeNodeTest.render2_pathgraph_test()
+    CTreeNodeTest.save_test()

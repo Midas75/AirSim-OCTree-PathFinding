@@ -15,10 +15,23 @@ namespace ctree
 #define TREE_DIM 3
 #endif
 #ifndef for_dims
-#define for_dims(_this) for (int8_t dim = 0; dim < _this->dims; dim++)
+#define for_dims(_this) for (int8_t dim = 0; dim < (_this)->dims; dim++)
 
     constexpr int8_t TREE_CHILDS = 1 << TREE_DIM;
     constexpr std::array<float, TREE_DIM> ZEROS = {0};
+    struct TreeData
+    {
+        float min_length[TREE_DIM] = {0}, bound_min[TREE_DIM] = {0}, bound_max[TREE_DIM] = {0};
+        int8_t dims = TREE_DIM;
+    };
+    struct TreeNodeData
+    {
+        long id = 0;
+        long child[TREE_CHILDS] = {0};
+        int i_bound_min[TREE_DIM] = {0}, i_bound_max[TREE_DIM] = {0};
+        int8_t state = 0;
+        bool known = false, is_leaf = false;
+    };
     class TreeNode : public std::enable_shared_from_this<TreeNode>
     {
     private:
@@ -32,7 +45,6 @@ namespace ctree
         using PtrRef = Ptr &;
         using ConstPtrRef = ConstPtr &;
         inline static ConstPtrRef Nullptr = nullptr;
-
         inline static const float INF = std::numeric_limits<float>::infinity();
         static const int8_t EMPTY = 0;
         static const int8_t FULL = 1;
@@ -58,10 +70,92 @@ namespace ctree
                                   i_bound_max = {0},
                                   i_bound_size = {0},
                                   i_center = {0};
-        long id = -1;
-
+        long id = 0;
+        void serialize(TreeData &out_tree_data, std::vector<TreeNodeData> &out_tree_node_data) const
+        {
+            out_tree_data.dims = this->dims;
+            std::copy(this->min_length.begin(), this->min_length.end(), out_tree_data.min_length);
+            std::copy(this->bound_min.begin(), this->bound_min.end(), out_tree_data.bound_min);
+            std::copy(this->bound_max.begin(), this->bound_max.end(), out_tree_data.bound_max);
+            this->serialize(out_tree_node_data);
+        }
+        void serialize(std::vector<TreeNodeData> &out_tree_node_data) const
+        {
+            auto otnd = TreeNodeData();
+            std::copy(this->i_bound_min.begin(), this->i_bound_min.end(), otnd.i_bound_min);
+            std::copy(this->i_bound_max.begin(), this->i_bound_max.end(), otnd.i_bound_max);
+            otnd.id = this->id;
+            otnd.is_leaf = this->is_leaf;
+            otnd.state = this->state;
+            otnd.known = this->known;
+            for (int i = 0; i < TREE_CHILDS; i++)
+            {
+                auto &c = this->child[i];
+                if (c != Nullptr)
+                {
+                    otnd.child[i] = c->id;
+                    c->serialize(out_tree_node_data);
+                }
+            }
+            out_tree_node_data.emplace_back(std::move(otnd));
+        }
+        static ConstPtr deserialize(const TreeData &tree_data, const std::vector<TreeNodeData> &tree_node_datas)
+        {
+            auto map = std::unordered_map<long, size_t>();
+            return deserialize(tree_data, tree_node_datas, map);
+        }
+        static ConstPtr deserialize(const TreeData &tree_data, const std::vector<TreeNodeData> &tree_node_datas,
+                                    std::unordered_map<long, size_t> &_tree_nodes_map,
+                                    long _current_id = 0, ConstPtrRef _parent = Nullptr)
+        {
+            Ptr node;
+            bool is_root = false;
+            if (_current_id == 0)
+            {
+                std::array<float, 3> abmin = {0}, abmax = {0}, aml = {0};
+                for (int8_t dim = 0; dim < tree_data.dims; dim++)
+                {
+                    abmin[dim] = tree_data.bound_min[dim];
+                    abmax[dim] = tree_data.bound_max[dim];
+                    aml[dim] = tree_data.min_length[dim];
+                }
+                node = TreeNode::create()->as_root(abmin, abmax, aml, tree_data.dims);
+                _tree_nodes_map.reserve(tree_node_datas.size());
+                for (int i = 0; i < tree_node_datas.size(); i++)
+                {
+                    _tree_nodes_map.emplace(tree_node_datas[i].id, i);
+                }
+                is_root = true;
+                _current_id = node->id;
+            }
+            const TreeNodeData &info = tree_node_datas[_tree_nodes_map[_current_id]];
+            if (!is_root)
+            {
+                node = TreeNode::create(_parent.get());
+                for (int8_t dim = 0; dim < tree_data.dims; dim++)
+                {
+                    node->i_bound_max[dim] = info.i_bound_max[dim];
+                    node->i_bound_min[dim] = info.i_bound_min[dim];
+                }
+                node->update_bound();
+            }
+            node->state = info.state;
+            node->known = info.known;
+            node->is_leaf = info.is_leaf;
+            for (int8_t direction = 0; direction < TREE_CHILDS; direction++)
+            {
+                if (info.child[direction] > 0)
+                {
+                    node->child[direction] = TreeNode::deserialize(
+                        tree_data, tree_node_datas,
+                        _tree_nodes_map,
+                        info.child[direction], node);
+                }
+            }
+            return node;
+        }
         static ConstPtr create(TreeNode *parent = nullptr,
-                               const int8_t direction = 0,
+                               const int8_t direction = -1,
                                const int8_t divide = 0)
         {
             auto self = std::shared_ptr<TreeNode>(new TreeNode());
@@ -78,28 +172,31 @@ namespace ctree
                 self->dims = parent->dims;
                 self->directions = 1 << self->dims;
                 self->min_length = parent->min_length;
-                int8_t _divide = divide, _direction = direction;
-                for_dims(self)
+                if (direction >= 0)
                 {
-                    _divide >>= dim;
-                    _direction >>= dim;
-                    if (!(_divide & 1))
+                    int8_t _divide = divide, _direction = direction;
+                    for_dims(self)
                     {
-                        self->i_bound_min[dim] = parent->i_bound_min[dim];
-                        self->i_bound_max[dim] = parent->i_bound_max[dim];
+                        _divide >>= dim;
+                        _direction >>= dim;
+                        if (!(_divide & 1))
+                        {
+                            self->i_bound_min[dim] = parent->i_bound_min[dim];
+                            self->i_bound_max[dim] = parent->i_bound_max[dim];
+                        }
+                        else if (!(_direction & 1))
+                        {
+                            self->i_bound_min[dim] = parent->i_bound_min[dim];
+                            self->i_bound_max[dim] = parent->i_center[dim];
+                        }
+                        else
+                        {
+                            self->i_bound_min[dim] = parent->i_center[dim];
+                            self->i_bound_max[dim] = parent->i_bound_max[dim];
+                        }
                     }
-                    else if (!(_direction & 1))
-                    {
-                        self->i_bound_min[dim] = parent->i_bound_min[dim];
-                        self->i_bound_max[dim] = parent->i_center[dim];
-                    }
-                    else
-                    {
-                        self->i_bound_min[dim] = parent->i_center[dim];
-                        self->i_bound_max[dim] = parent->i_bound_max[dim];
-                    }
+                    self->update_bound();
                 }
-                self->update_bound();
             }
             return self;
         }
@@ -885,7 +982,7 @@ namespace ctree
         std::unordered_set<std::pair<long, long>, pair_hash_ll> edges;
         TreeNode::ConstPtrRef tree_node;
         float f = 0, g = 0, h = 0;
-        long from_node = -1;
+        long from_node = 0;
         PathNode(TreeNode::ConstPtrRef tree_node) : tree_node(tree_node), id(tree_node->id), dims(tree_node->dims)
         {
         }
@@ -1077,7 +1174,7 @@ namespace ctree
                 }
                 else
                 {
-                    it->second->from_node = -1;
+                    it->second->from_node = 0;
                     ++it;
                 }
             }
@@ -1096,7 +1193,7 @@ namespace ctree
             while (true)
             {
                 path_list.emplace_back(current->tree_node);
-                if (current->from_node == -1)
+                if (current->from_node <= 0)
                 {
                     break;
                 }
