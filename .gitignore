@@ -4,3 +4,10 @@ python/t.json
 python/*.json.bak
 python/*.json
 python/*.json.gz
+.vscode
+ctree/*
+!ctree/*.hpp
+!ctree/*.cpp
+!ctree/*.sln
+!ctree/*.vcxproj*
+result.prof

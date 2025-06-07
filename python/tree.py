@@ -4,18 +4,18 @@
 from __future__ import annotations
 import random
 import time
-import math
-import itertools
+from math import sqrt, ceil, log2, sin, cos, pi
+from itertools import product
 import typing
 import json
 import gzip
 
-import numpy
+from numpy import ndarray, uint8, ones
 
 
 from sortedcontainers import SortedSet
 
-import cv2
+from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
 import open3d
 
 
@@ -45,7 +45,7 @@ class PathNode:
             (self.tree_node.center[i] - other.tree_node.center[i]) ** 2
             for i in self.tree_node.rangel
         ]
-        return math.sqrt(sum(v)) * up_factor
+        return sqrt(sum(v)) * up_factor
 
     def __eq__(self, value: object) -> bool:
         return self.id == value.id
@@ -181,16 +181,16 @@ class PathGraph:
                     if neighbor in leaves:
                         self.add_edge(leaf, neighbor)
 
-    def construct_path(self, current: PathNode, path_list: list[PathNode]):
+    def construct_path(self, current: PathNode, path_list: list[TreeNode]):
         while current is not None:
-            path_list.append(current)
+            path_list.append(current.tree_node)
             current = current.from_node
         path_list.reverse()
 
     def get_path(
         self, tree_start: TreeNode, tree_end: TreeNode, unknown_penalty: bool = True
-    ) -> list[PathNode]:
-        result = list[PathNode]()
+    ) -> list[TreeNode]:
+        result = list[TreeNode]()
         start = self.find_node(tree_start)
         end = self.find_node(tree_end)
         if start is None or end is None:
@@ -230,14 +230,14 @@ class PathGraph:
                     open_set.add(neighbor)
         return result
 
-    def interpolation_center(self, path: list[PathNode]) -> list[list[float]]:
+    def interpolation_center(self, path: list[TreeNode]) -> list[list[float]]:
         result = list[list[float]]()
         if len(path) <= 0:
             return result
-        result.append(path[0].tree_node.center)
+        result.append(path[0].center)
         for i in range(1, len(path)):
-            f = path[i - 1].tree_node
-            t = path[i].tree_node
+            f = path[i - 1]
+            t = path[i]
             result.append(f.contact_center(t))
             result.append(t.center)
         return result
@@ -392,8 +392,7 @@ class TreeNode:
         self.dims = len(min_length)
         self.rangel = range(self.dims)
         self.directions = [
-            list(reversed(p))
-            for p in itertools.product([False, True], repeat=self.dims)
+            list(reversed(p)) for p in product([False, True], repeat=self.dims)
         ]
         self.root = self
         self.parent = None
@@ -419,8 +418,8 @@ class TreeNode:
                     f"on dim:{dim}, min_length {self.min_length[dim]} "
                     f"is smaller than bound_size {self.bound_size[dim]}"
                 )
-            self.i_bound_size[dim] = 2 ** math.ceil(
-                math.log2(dim_ratio)
+            self.i_bound_size[dim] = 2 ** ceil(
+                log2(dim_ratio)
             )  # assure i_center is int
             self.i_bound_max[dim] = self.i_bound_size[dim]
             self.i_bound_min[dim] = 0
@@ -803,7 +802,7 @@ class TreeNode:
                 sign[dim] = 1
             elif direction[dim] < 0:
                 sign[dim] = -1
-        quit = False
+        q = False
         visit = set[int]()
         while True:
             cnode = self.query(current)
@@ -819,11 +818,11 @@ class TreeNode:
                 cd = abs(current[dim] - start[dim])
                 ad = abs(direction[dim])
                 if cd > ad:
-                    quit = True
+                    q = True
                     break
                 if cd > culling_min_ratio * ad and cd < culling_max_ratio * ad:
                     need_culling = True
-            if quit:
+            if q:
                 break
             if cnode.state != cnode.EMPTY and need_culling and dynamic_culling > 0:
                 if cnode.dynamic_culling < 0:
@@ -892,11 +891,11 @@ class TreeNode:
         self,
         width: int = 720,
         show_now: int = -1,
-        image: numpy.ndarray = None,
+        image: ndarray = None,
         with_graph: PathGraph = None,
         with_path: list[list[float]] = None,
         _root: TreeNode = None,
-    ) -> numpy.ndarray:
+    ) -> ndarray:
         if self.dims != 2:
             raise ValueError(f"tree dim {self.dims} is not 2")
         is_root = False
@@ -904,7 +903,7 @@ class TreeNode:
             is_root = True
             _root = self
         if image is None:
-            image = numpy.ones((width, width, 3), dtype=numpy.uint8) * 200
+            image = ones((width, width, 3), dtype=uint8) * 200
         x_ratio = 1 / (_root.i_bound_max[0] - _root.i_bound_min[0]) * width
         y_ratio = 1 / (_root.i_bound_max[1] - _root.i_bound_min[1]) * width
 
@@ -918,12 +917,12 @@ class TreeNode:
         )
 
         if self.state == self.FULL:
-            cv2.rectangle(  # pylint: disable=no-member
+            rectangle(  # pylint: disable=no-member
                 image, lt, rb, (0, 0, 128), thickness=-1
             )
         elif self.known and self.is_leaf:
-            cv2.rectangle(image, lt, rb, (128, 64, 64), thickness=-1)
-        cv2.rectangle(image, lt, rb, (128, 0, 0), 1)  # pylint: disable=no-member
+            rectangle(image, lt, rb, (128, 64, 64), thickness=-1)
+        rectangle(image, lt, rb, (128, 0, 0), 1)  # pylint: disable=no-member
         if self.child is not None:
             for i in self.child:
                 self.child[i].render2(width=width, image=image, _root=_root)
@@ -941,7 +940,7 @@ class TreeNode:
                         int((cb[0] - _root.i_bound_min[0]) * x_ratio),
                         int((cb[1] - _root.i_bound_min[1]) * y_ratio),
                     )
-                    cv2.line(image, pa, pb, (0, 200, 0), 1)
+                    line(image, pa, pb, (0, 200, 0), 1)
             if with_path is not None:
                 fx_ratio = 1 / (_root.bound_max[0] - _root.bound_min[0]) * width
                 fy_ratio = 1 / (_root.bound_max[1] - _root.bound_min[1]) * width
@@ -954,10 +953,10 @@ class TreeNode:
                         int((with_path[i][0] - _root.bound_min[0]) * fx_ratio),
                         int((with_path[i][1] - _root.bound_min[1]) * fy_ratio),
                     )
-                    cv2.line(image, pa, pb, (255, 255, 255), 1)
+                    line(image, pa, pb, (255, 255, 255), 1)
         if show_now >= 0:
-            cv2.imshow(self.__class__.__name__, image)  # pylint: disable=no-member
-            cv2.waitKey(show_now)  # pylint: disable=no-member
+            imshow(self.__class__.__name__, image)  # pylint: disable=no-member
+            waitKey(show_now)  # pylint: disable=no-member
         return image
 
     def render3(
@@ -1048,8 +1047,8 @@ class TreeTest:
         number = 500
         for i in range(number):
             p = [
-                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
-                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
             start = time.perf_counter()
             tn.add_raycast([0, 0], p, False)
@@ -1182,8 +1181,8 @@ class TreeTest:
         number = 50
         for i in range(number):
             p = [
-                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
-                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
             tn.add_raycast([0, 0], p, False)
         start = time.perf_counter()
@@ -1193,9 +1192,9 @@ class TreeTest:
         start = time.perf_counter()
         deserialized = TreeNode.deserialize(obj)
         print(f"deserialization cost {1000*(time.perf_counter()-start)} ms")
-        cv2.imshow("Raw", tn.render2())  # pylint: disable=no-member
-        cv2.imshow("New", deserialized.render2())  # pylint: disable=no-member
-        cv2.waitKey(0)  # pylint: disable=no-member
+        imshow("Raw", tn.render2())  # pylint: disable=no-member
+        imshow("New", deserialized.render2())  # pylint: disable=no-member
+        waitKey(0)  # pylint: disable=no-member
 
     @staticmethod
     def save_load_test():
@@ -1203,8 +1202,8 @@ class TreeTest:
         number = 50
         for i in range(number):
             p = [
-                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
-                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
             tn.add_raycast([0, 0], p, False)
         start = time.perf_counter()
@@ -1214,9 +1213,9 @@ class TreeTest:
         start = time.perf_counter()
         loaded = TreeNode.load()
         print(f"load cost {1000*(time.perf_counter()-start)} ms")
-        cv2.imshow("Raw", tn.render2())  # pylint: disable=no-member
-        cv2.imshow("New", loaded.render2())  # pylint: disable=no-member
-        cv2.waitKey(0)  # pylint: disable=no-member
+        imshow("Raw", tn.render2())  # pylint: disable=no-member
+        imshow("New", loaded.render2())  # pylint: disable=no-member
+        waitKey(0)  # pylint: disable=no-member
 
     @staticmethod
     def dynamic_culling_test():
@@ -1233,7 +1232,7 @@ class TreeTest:
             for i in range(number):
                 p = [
                     30,
-                    tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+                    tn.bound_size[1] * cos(pi / 2 * i / number),
                 ]
                 if (
                     p[1] > moving_obstacle[1] - obstacle_size / 2
@@ -1247,15 +1246,14 @@ class TreeTest:
     def raycast_benchmark_test():
         tn = TreeNode().as_root([0, 0], [640, 640], [2, 2])
         number = 501
+        start = time.perf_counter()
         for i in range(number):
-            if i == 1:
-                start = time.perf_counter()
             p = [
-                tn.bound_size[0] * math.sin(math.pi / 2 * i / number),
-                tn.bound_size[1] * math.cos(math.pi / 2 * i / number),
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
             tn.add_raycast([0, 0], p, False)
-        print(f"add_raycast {number-1} times cost {1000*(time.perf_counter()-start)} ms")
+        print(f"add_raycast {number} times cost {1000*(time.perf_counter()-start)} ms")
 
 
 if __name__ == "__main__":

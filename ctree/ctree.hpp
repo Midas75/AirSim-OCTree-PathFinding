@@ -15,20 +15,25 @@ namespace ctree
 #define TREE_DIM 3
 #endif
 #ifndef for_dims
-#define for_dims(_this) for (int dim = 0; dim < _this->dims; dim++)
+#define for_dims(_this) for (int8_t dim = 0; dim < _this->dims; dim++)
 
     constexpr int8_t TREE_CHILDS = 1 << TREE_DIM;
     constexpr std::array<float, TREE_DIM> ZEROS = {0};
     class TreeNode : public std::enable_shared_from_this<TreeNode>
     {
+    private:
+        explicit TreeNode() {}
+        TreeNode(const TreeNode &) = delete;
+        TreeNode &operator=(const TreeNode &) = delete;
+
     public:
         using Ptr = std::shared_ptr<TreeNode>;
         using ConstPtr = const Ptr;
         using PtrRef = Ptr &;
         using ConstPtrRef = ConstPtr &;
-        static ConstPtrRef Nullptr;
+        inline static ConstPtrRef Nullptr = nullptr;
 
-        static const float INF;
+        inline static const float INF = std::numeric_limits<float>::infinity();
         static const int8_t EMPTY = 0;
         static const int8_t FULL = 1;
         static const int8_t HALF_FULL = 2;
@@ -36,7 +41,7 @@ namespace ctree
         Ptr child[TREE_CHILDS];
         bool no_child = true;
 
-        int8_t state;
+        int8_t state = TreeNode::EMPTY;
         int dynamic_culling = -1;
 
         std::array<float, TREE_DIM> bound_min = {0},
@@ -45,56 +50,58 @@ namespace ctree
                                     center = {0},
                                     min_length = {0};
         TreeNode *parent = nullptr, *root = nullptr;
-        int8_t dims;
-        int8_t directions;
+        int8_t dims = TREE_DIM;
+        int8_t directions = TREE_CHILDS;
 
         bool _min = false, is_leaf = true, known = false;
         std::array<int, TREE_DIM> i_bound_min = {0},
                                   i_bound_max = {0},
                                   i_bound_size = {0},
                                   i_center = {0};
-        long id;
+        long id = -1;
 
-        TreeNode(TreeNode *parent = nullptr,
-                 const int8_t direction = 0,
-                 const int8_t divide = 0)
+        static ConstPtr create(TreeNode *parent = nullptr,
+                               const int8_t direction = 0,
+                               const int8_t divide = 0)
         {
-            this->state = TreeNode::EMPTY;
+            auto self = std::shared_ptr<TreeNode>(new TreeNode());
+            self->state = TreeNode::EMPTY;
             for (int i = 0; i < TREE_CHILDS; i++)
             {
-                this->child[i] = nullptr;
+                self->child[i] = nullptr;
             }
             if (parent != nullptr)
             {
-                this->parent = parent;
-                this->root = parent->root;
+                self->parent = parent;
+                self->root = parent->root;
 
-                this->dims = parent->dims;
-                this->directions = 1 << this->dims;
-                this->min_length = parent->min_length;
+                self->dims = parent->dims;
+                self->directions = 1 << self->dims;
+                self->min_length = parent->min_length;
                 int8_t _divide = divide, _direction = direction;
-                for_dims(this)
+                for_dims(self)
                 {
                     _divide >>= dim;
                     _direction >>= dim;
                     if (!(_divide & 1))
                     {
-                        this->i_bound_min[dim] = parent->i_bound_min[dim];
-                        this->i_bound_max[dim] = parent->i_bound_max[dim];
+                        self->i_bound_min[dim] = parent->i_bound_min[dim];
+                        self->i_bound_max[dim] = parent->i_bound_max[dim];
                     }
                     else if (!(_direction & 1))
                     {
-                        this->i_bound_min[dim] = parent->i_bound_min[dim];
-                        this->i_bound_max[dim] = parent->i_center[dim];
+                        self->i_bound_min[dim] = parent->i_bound_min[dim];
+                        self->i_bound_max[dim] = parent->i_center[dim];
                     }
                     else
                     {
-                        this->i_bound_min[dim] = parent->i_center[dim];
-                        this->i_bound_max[dim] = parent->i_bound_max[dim];
+                        self->i_bound_min[dim] = parent->i_center[dim];
+                        self->i_bound_max[dim] = parent->i_bound_max[dim];
                     }
                 }
-                this->update_bound();
+                self->update_bound();
             }
+            return self;
         }
         void update_bound()
         {
@@ -149,7 +156,7 @@ namespace ctree
             const std::array<float, TREE_DIM> &bound_min,
             const std::array<float, TREE_DIM> &bound_max,
             const std::array<float, TREE_DIM> &min_length,
-            const int dims = TREE_DIM)
+            const int8_t dims = TREE_DIM)
         {
             this->dims = dims;
             this->directions = 1 << this->dims;
@@ -197,14 +204,14 @@ namespace ctree
                 return;
             }
             this->is_leaf = false;
-            for (int i = 0; i < this->directions; i++)
+            for (int8_t i = 0; i < this->directions; i++)
             {
                 auto reduced = this->get_bound_by_direction(i);
                 auto ri = reduced.first, d = reduced.second;
                 if (this->child[ri] == nullptr)
                 {
                     this->no_child = false;
-                    auto c = std::make_shared<TreeNode>(this, i, d);
+                    auto c = TreeNode::create(this, i, d);
                     this->child[ri] = c;
                     this->child[i] = c;
                     this->divide(depth - 1);
@@ -839,11 +846,12 @@ namespace ctree
                 return changed;
             }
             out_path.clear();
-            int size_1 = path.size() - 1;
-            int i = 0;
+            out_path.emplace_back(path[0]);
+            size_t size_1 = path.size() - 1;
+            size_t i = 0;
             while (i < size_1)
             {
-                int j = size_1;
+                size_t j = size_1;
                 while (j > i + 1)
                 {
                     if (!this->cross_lca(path[i], path[j], expand))
@@ -859,8 +867,6 @@ namespace ctree
             return changed;
         }
     };
-    TreeNode::ConstPtrRef TreeNode::Nullptr = nullptr;
-    const float TreeNode::INF = std::numeric_limits<float>::infinity();
     struct pair_hash_ll
     {
         std::size_t operator()(const std::pair<long, long> &p) const
@@ -885,7 +891,7 @@ namespace ctree
         }
         float distance(std::shared_ptr<PathNode> &other, bool unknown_penalty = true) const
         {
-            float up_factor = 0.2;
+            float up_factor = 0.2f;
             if (unknown_penalty)
             {
                 if ((!this->tree_node->known) || (!other->tree_node->known))
@@ -927,6 +933,7 @@ namespace ctree
     };
     class PathGraph
     {
+    public:
         std::unordered_map<long, std::shared_ptr<PathNode>> nodes;
         std::unordered_map<std::pair<long, long>, std::shared_ptr<PathEdge>, pair_hash_ll> edges;
         TreeNode::Ptr last_root = nullptr;
@@ -1083,19 +1090,23 @@ namespace ctree
             this->last_root = root;
             this->last_leaves = this->now_leaves;
         }
-        void construct_path(std::shared_ptr<PathNode> current, std::vector<std::shared_ptr<PathNode>> &path_list)
+        void construct_path(std::shared_ptr<PathNode> current, std::vector<TreeNode::Ptr> &path_list)
         {
 
-            while (current != nullptr)
+            while (true)
             {
-                path_list.emplace_back(current);
+                path_list.emplace_back(current->tree_node);
+                if (current->from_node == -1)
+                {
+                    break;
+                }
                 current = this->nodes.at(current->from_node);
             }
             std::reverse(path_list.begin(), path_list.end());
         }
         void get_path(TreeNode::ConstPtrRef tree_start,
                       TreeNode::ConstPtrRef tree_end,
-                      std::vector<std::shared_ptr<PathNode>> &out_path,
+                      std::vector<TreeNode::Ptr> &out_path,
                       bool unknown_penalty = true)
         {
             out_path.clear();
@@ -1161,7 +1172,7 @@ namespace ctree
             return;
         }
         void interpolation_center(
-            const std::vector<std::shared_ptr<PathNode>> &path,
+            const std::vector<TreeNode::Ptr> &path,
             std::vector<std::array<float, TREE_DIM>> &out_path) const
         {
             out_path.clear();
@@ -1169,11 +1180,11 @@ namespace ctree
             {
                 return;
             }
-            out_path.emplace_back(path[0]->tree_node->center);
+            out_path.emplace_back(path[0]->center);
             for (int i = 1; i < path.size(); i++)
             {
-                auto f = path.at(i - 1)->tree_node;
-                auto t = path.at(i)->tree_node;
+                auto f = path.at(i - 1);
+                auto t = path.at(i);
                 std::array<float, TREE_DIM> center;
                 auto c = f->contact_center(t, center);
                 if (c)
