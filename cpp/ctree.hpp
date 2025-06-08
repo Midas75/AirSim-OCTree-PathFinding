@@ -102,10 +102,15 @@ namespace ctree
         static ConstPtr deserialize(const TreeData &tree_data, const std::vector<TreeNodeData> &tree_node_datas)
         {
             auto map = std::unordered_map<long, size_t>();
+            map.reserve(tree_node_datas.size());
+            for (size_t i = 0; i < tree_node_datas.size(); i++)
+            {
+                map.emplace(tree_node_datas[i].id, i);
+            }
             return deserialize(tree_data, tree_node_datas, map);
         }
         static ConstPtr deserialize(const TreeData &tree_data, const std::vector<TreeNodeData> &tree_node_datas,
-                                    std::unordered_map<long, size_t> &_tree_nodes_map,
+                                    const std::unordered_map<long, size_t> &_tree_nodes_map,
                                     long _current_id = 0, ConstPtrRef _parent = Nullptr)
         {
             Ptr node;
@@ -120,15 +125,10 @@ namespace ctree
                     aml[dim] = tree_data.min_length[dim];
                 }
                 node = TreeNode::create()->as_root(abmin, abmax, aml, tree_data.dims);
-                _tree_nodes_map.reserve(tree_node_datas.size());
-                for (int i = 0; i < tree_node_datas.size(); i++)
-                {
-                    _tree_nodes_map.emplace(tree_node_datas[i].id, i);
-                }
                 is_root = true;
                 _current_id = node->id;
             }
-            const TreeNodeData &info = tree_node_datas[_tree_nodes_map[_current_id]];
+            const TreeNodeData &info = tree_node_datas[_tree_nodes_map.at(_current_id)];
             if (!is_root)
             {
                 node = TreeNode::create(_parent.get());
@@ -146,6 +146,7 @@ namespace ctree
             {
                 if (info.child[direction] > 0)
                 {
+                    node->no_child = false;
                     node->child[direction] = TreeNode::deserialize(
                         tree_data, tree_node_datas,
                         _tree_nodes_map,
@@ -177,8 +178,8 @@ namespace ctree
                     int8_t _divide = divide, _direction = direction;
                     for_dims(self)
                     {
-                        _divide >>= dim;
-                        _direction >>= dim;
+                        _divide = divide >> dim;
+                        _direction = direction >> dim;
                         if (!(_divide & 1))
                         {
                             self->i_bound_min[dim] = parent->i_bound_min[dim];
@@ -446,7 +447,6 @@ namespace ctree
             }
             if (this->is_leaf)
             {
-                // return shared_from_this();
             }
             else
             {
@@ -785,7 +785,7 @@ namespace ctree
             auto end = this->query(point);
             std::array<float, TREE_DIM> current = start;
             std::array<float, TREE_DIM> direction = {0};
-            int8_t sign[TREE_DIM] = {0};
+            std::array<int8_t, TREE_DIM> sign = {0};
             for_dims(this)
             {
                 direction[dim] = point[dim] - start[dim];

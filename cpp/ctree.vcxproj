@@ -126,6 +126,7 @@
   <ItemGroup>
     <ClCompile Include="memory_leak_test.cpp" />
     <ClCompile Include="pathgraph_test.cpp" />
+    <ClCompile Include="ray3d_test.cpp" />
   </ItemGroup>
   <ItemGroup>
     <ClInclude Include="ctree.hpp" />

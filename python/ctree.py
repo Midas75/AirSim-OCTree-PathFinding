@@ -15,6 +15,7 @@ import gzip
 from numpy import ones, ndarray, uint8
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
 from cppyy import cppdef, include, gbl, addressof
+from open3d import geometry, utility, visualization
 
 try:
     import tqdm
@@ -43,7 +44,7 @@ def init_ctree(
     C_TREE_DIM = c_tree_dim
     CACHE_C_TREE_PROPS = cache_c_tree_props
     cppdef(f"#define TREE_DIM {C_TREE_DIM}")
-    include(f"{os.path.dirname(__file__)}/../ctree/ctree.hpp")
+    include(f"{os.path.dirname(__file__)}/../cpp/ctree.hpp")
     _F_STD_ARRAY = gbl.std.array["float", C_TREE_DIM]
     _I_STD_ARRAY = gbl.std.array["int", C_TREE_DIM]
     _TREENODE_STD_VECTOR = gbl.std.vector[gbl.ctree.TreeNode.Ptr]
@@ -142,7 +143,7 @@ class CTreeNode:
         tn.add([50] * C_TREE_DIM)
         tn.add_i([0] * C_TREE_DIM)
         tn.add_raycast([0] * C_TREE_DIM, [100] * C_TREE_DIM)
-        tn.serialize()
+        tn.deserialize(tn.serialize())
         _ = (
             tn.bound_max,
             tn.bound_min,
@@ -170,7 +171,7 @@ class CTreeNode:
         if _result is not None:
             _result.clear()
         else:
-            _result = dict[str,Any]()
+            _result = dict[str, Any]()
         td = gbl.ctree.TreeData()
         tnd = _TREENODE_DATA_STD_VECTOR()
         self._c.serialize(td, tnd)
@@ -204,11 +205,44 @@ class CTreeNode:
 
     def save(self, path: str = None) -> None:
         if path is None:
-            path = f"{self.__class__.__name__}.json.gz"
+            path = f"{__class__.__name__}.json.gz"
         with open(path, "wb") as f:
             j = json.dumps(self.serialize())
             gz = gzip.compress(j.encode("utf-8"))
             f.write(gz)
+
+    @staticmethod
+    def deserialize(obj: dict[str, Any]) -> CTreeNode:
+        td = gbl.ctree.TreeData()
+        tndv = _TREENODE_DATA_STD_VECTOR()
+        dims = len(obj["bound_min"])
+        td.dims = dims
+        for dim in range(dims):
+            td.min_length[dim] = obj["min_length"][dim]
+            td.bound_min[dim] = obj["bound_min"][dim]
+            td.bound_max[dim] = obj["bound_max"][dim]
+        for str_id, item in obj["nodes"].items():
+            tnd = gbl.ctree.TreeNodeData()
+            tnd.id = int(str_id)
+            tnd.state = item["state"]
+            tnd.known = item["known"]
+            tnd.is_leaf = item["is_leaf"]
+            for dim in range(dims):
+                tnd.i_bound_min[dim] = item["i_bound_min"][dim]
+                tnd.i_bound_max[dim] = item["i_bound_max"][dim]
+            if "child" in item:
+                for str_direction, int_child_id in item["child"].items():
+                    tnd.child[int(str_direction)] = int_child_id
+            tndv.emplace_back(tnd)
+        return CTreeNode(gbl.ctree.TreeNode.deserialize(td, tndv))
+
+    @staticmethod
+    def load(path: str = None) -> CTreeNode:
+        if path is None:
+            path = f"{__class__.__name__}.json.gz"
+        with open(path, "rb") as f:
+            j = gzip.decompress(f.read()).decode("utf-8")
+            return CTreeNode.deserialize(json.loads(j))
 
     def as_root(
         self, bound_min: list[float], bound_max: list[float], min_length: list[float]
@@ -222,7 +256,10 @@ class CTreeNode:
         return self._c.divide(depth)
 
     def query(self, point: list[float], nearest_on_oor: bool = False) -> CTreeNode:
-        return CTreeNode(self._c.query(farray(point), nearest_on_oor))
+        result = self._c.query(farray(point), nearest_on_oor)
+        if addressof(result) == 0:
+            return None
+        return CTreeNode(result)
 
     def clear_as(self, state: Literal[0, 1, 2]) -> None:
         return self._c.clear_as(state)
@@ -423,12 +460,56 @@ class CTreeNode:
                         int((with_path[i][0] - _root.bound_min[0]) * fx_ratio),
                         int((with_path[i][1] - _root.bound_min[1]) * fy_ratio),
                     )
-                    print(pa, pb)
                     line(image, pa, pb, (255, 255, 255), 1)
         if show_now >= 0:
             imshow(self.__class__.__name__, image)
             waitKey(show_now)
         return image
+
+    def render3(
+        self,
+        show_now: int = -1,
+        geometries: list[geometry.Geometry] = None,
+        with_path: list[list[float]] = None,
+        with_coordinate: bool = True,
+    ) -> list[geometry.Geometry]:
+        is_root = False
+        if geometries is None:
+            is_root = True
+            geometries = list[geometry.Geometry]()
+        if self.state == self.FULL:
+            geometries.append(
+                geometry.TriangleMesh.create_box(
+                    self.bound_size[0], self.bound_size[1], self.bound_size[2]
+                ).translate(self.bound_min)
+            )
+        elif self.state == self.HALF_FULL and self.child is not None:
+            for direction in self.child:
+                self.child[direction].render3(geometries=geometries)
+        if is_root:
+            merge_mesh = geometry.TriangleMesh()
+            for tm in geometries:
+                merge_mesh += tm
+            merge_mesh.remove_duplicated_triangles()
+            merge_mesh.compute_vertex_normals()
+            geometries = [merge_mesh]
+            if with_coordinate:
+                geometries.append(
+                    geometry.TriangleMesh.create_coordinate_frame(
+                        size=max(*self.bound_size)
+                    )
+                )
+            if with_path is not None and len(with_path) > 1:
+                connection = [[i, i + 1] for i in range(len(with_path) - 1)]
+                ls = geometry.LineSet(
+                    utility.Vector3dVector(with_path),
+                    utility.Vector2iVector(connection),
+                )
+                ls.paint_uniform_color((1, 0, 0))
+                geometries.append(ls)
+        if show_now >= 0:
+            visualization.draw_geometries(geometries)  # pylint: disable=no-member
+        return geometries
 
 
 class CPathNode:
@@ -640,10 +721,9 @@ class CTreeNodeTest:
         pg = CPathGraph()
         tn.add_raycast([0, 0], [25, 49])
         pg.update(tn)
-        path = pg.get_path(tn.query([0, 0]), tn.query([50, 50]))
+        path = pg.get_path(tn.query([0, 0], True), tn.query([50, 50], True))
         c_path = pg.interpolation_center(path)
         _, s_path = tn.path_smoothing(c_path)
-        print(s_path)
         tn.render2(show_now=0, with_graph=pg, with_path=s_path)
 
     @staticmethod
@@ -661,7 +741,74 @@ class CTreeNodeTest:
         tn.save()
         print(f"save cost {1000*(perf_counter()-start)} ms")
 
+    @staticmethod
+    def serialize_deserialize_test():
+        tn = CTreeNode().as_root([0, 0], [50, 50], [1, 1])
+        number = 50
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0], p, False)
+        start = perf_counter()
+        obj = tn.serialize()
+        print(f"serialization cost {1000*(perf_counter()-start)} ms")
+
+        start = perf_counter()
+        deserialized = CTreeNode.deserialize(obj)
+        print(f"deserialization cost {1000*(perf_counter()-start)} ms")
+        imshow("Raw", tn.render2())
+        imshow("New", deserialized.render2())
+        waitKey(0)
+
+    @staticmethod
+    def save_load_test():
+        tn = CTreeNode().as_root([0, 0], [50, 50], [1, 1])
+        number = 50
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0], p, False)
+        start = perf_counter()
+        tn.save()
+        print(f"save cost {1000*(perf_counter()-start)} ms")
+
+        start = perf_counter()
+        loaded = CTreeNode.load()
+        print(f"load cost {1000*(perf_counter()-start)} ms")
+        imshow("Raw", tn.render2())
+        imshow("New", loaded.render2())
+        waitKey(0)
+
+    @staticmethod
+    def ray3d_test():
+        tn = CTreeNode().as_root([0, 0, 0], [50, 50, 50], [1, 1, 1])
+        number = 50
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
+                tn.bound_size[2] / 2,
+            ]
+            tn.add_raycast([0, 0, 0], p, False, -1)
+            p = [
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] / 2,
+                tn.bound_size[2] * cos(pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0, 0], p, False, -1)
+            p = [
+                tn.bound_size[0] / 2,
+                tn.bound_size[1] * sin(pi / 2 * i / number),
+                tn.bound_size[2] * cos(pi / 2 * i / number),
+            ]
+            tn.add_raycast([0, 0, 0], p, False, -1)
+        tn.render3(0)
+
 
 if __name__ == "__main__":
     init_ctree()
-    CTreeNodeTest.save_test()
+    CTreeNodeTest.ray3d_test()

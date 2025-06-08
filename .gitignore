@@ -5,9 +5,9 @@ python/*.json.bak
 python/*.json
 python/*.json.gz
 .vscode
-ctree/*
-!ctree/*.hpp
-!ctree/*.cpp
-!ctree/*.sln
-!ctree/*.vcxproj*
+cpp/*
+!cpp/*.hpp
+!cpp/*.cpp
+!cpp/*.sln
+!cpp/*.vcxproj*
 result.prof

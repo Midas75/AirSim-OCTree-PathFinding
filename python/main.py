@@ -3,22 +3,26 @@ import math
 import os
 import datetime
 
-from tree import PathGraph, TreeNode
 import drone_request
 import fusion_detection
 import airsim
 
 from msgpackrpc.future import Future
 
+from tree import PathGraph, TreeNode
+from ctree import CPathGraph, CTreeNode, init_ctree
+
 
 all_points = []
 all_colors = []
 all_paths = []
 all_path_colors = []
+tn_cls = CTreeNode
+pg_cls = CPathGraph
 
 
-def getPath(
-    root: TreeNode, pg: PathGraph, current: list[float], target: list[float]
+def get_path(
+    root: tn_cls, pg: pg_cls, current: list[float], target: list[float]
 ) -> list[tuple[float, float, float]]:
     print("getting path...  ", end="")
     expand = [ml / 3 for ml in root.min_length]
@@ -30,15 +34,9 @@ def getPath(
     path = pg.get_path(current_node, target_node)
     c_path = [current] + pg.interpolation_center(path) + [target]
     _, s_path = root.path_smoothing(c_path, expand)
-    combine_index = 0
-    for i in range(len(path)):
-        if current_node == path[i].tree_node:
-            combine_index = i
-        else:
-            break
-    s_path = s_path[combine_index:]
     print(
-        f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms, start: {current_node.center} end: {target_node.center}"
+        f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms, "
+        f"start: {current} end: {target}"
     )
     return s_path
 
@@ -46,9 +44,9 @@ def getPath(
 def fly_to(
     ac: airsim.MultirotorClient,
     dr: drone_request.DroneRequestClient,
-    root: TreeNode,
+    root: tn_cls,
     target: list[float],
-    pg: PathGraph,
+    pg: pg_cls,
     dt: float = 0.1,
     velocity: float = 5,
     accept_distance: float = 4,
@@ -90,7 +88,7 @@ def fly_to(
         if not p[-1]:
             all_points.append((p[0], p[1], p[2]))
             all_colors.append(c)
-        root.add_raycast(list(current), [p[0], p[1], p[2]], p[-1], dynamic_culling=256)
+        root.add_raycast(list(current), [p[0], p[1], p[2]], p[-1], dynamic_culling=1000)
     current_node = root.query(current, True)
     target_node = root.query(target, True)
     if current_node.state != root.EMPTY:
@@ -105,9 +103,7 @@ def fly_to(
     real_target_node = root.query(real_target, True)
     if result and real_target_node.state != root.EMPTY:
         result = False
-        print(
-            f"cannot fly to {target} by {real_target_node.center,real_target_node.state == root.EMPTY}"
-        )
+        print(f"cannot fly to {target} by {real_target_node.center}")
     # print(f"moving to {real_target} distance: {distance}")
     if abs(yaw_offset) > 20:
         real_velocity = 0
@@ -138,7 +134,8 @@ def fly_to(
     )
 
 
-if __name__ == "__main__":
+def main():
+    init_ctree()
     ac = airsim.MultirotorClient()
     time.sleep(1)
     ac.confirmConnection()
@@ -150,7 +147,6 @@ if __name__ == "__main__":
     ac.takeoffAsync().join()
     ac.moveToZAsync(-10, velocity=5).join()
     dr = drone_request.DroneRequestClient()
-    pg = PathGraph()
     # x = 500
     # y = 100
     # z = 500
@@ -158,52 +154,56 @@ if __name__ == "__main__":
     y = 12
     z = 100
     ml = [2, 2, 2]
+
+    pg = pg_cls()
     if os.path.exists("TreeNode.json.gz"):
-        root = TreeNode.load("TreeNode.json.gz")
+        tn = tn_cls.load("TreeNode.json.gz")
     else:
-        root = TreeNode().as_root([-x, 1, -z], [x, y, z], ml)
+        tn = tn_cls().as_root([-x, 1, -z], [x, y, z], ml)
+    print(tn.dims)
     # target = (-297, 12.65, 246.5)
     target = (71, 12, 83)
-    start = time.perf_counter()
+    start_time = time.perf_counter()
     print("first updating...")
-    pg.update(root)
-    print(f"first update cost {(time.perf_counter()-start)*1000:.2f}ms")
-    start = position = dr.getAttitude(1).getPosition()
-    path = getPath(root, pg, position, target)
-    currentIndex = 1
+    pg.update(tn)
+    print(f"first update cost {(time.perf_counter()-start_time)*1000:.2f}ms")
+    start_point = position = dr.getAttitude(1).getPosition()
+    path = get_path(tn, pg, position, target)
+    current_index = 1
     while True:
-        result, reach = fly_to(ac, dr, root, path[currentIndex], pg)
+        result, reach = fly_to(ac, dr, tn, path[current_index], pg)
         if not result:
-            # if target != path[currentIndex]:
-            #     root.add(path[currentIndex])
+            # if target != path[current_index]:
+            #     root.add(path[current_index])
             position = dr.getAttitude(1).getPosition()
-            path = getPath(root, pg, position, target)
+            path = get_path(tn, pg, position, target)
             if len(path) <= 2:
                 pass
                 # fusion_detection.renderPointCloud(
                 #     all_points + all_paths, all_colors + all_path_colors
                 # )
                 # root.render3(with_coordinate=False, show_now=0)
-            currentIndex = 1
+            current_index = 1
             continue
         if reach:
-            # print(f"reached {currentIndex}")
-            currentIndex += 1
-            if currentIndex >= len(path):
+            # print(f"reached {current_index}")
+            current_index += 1
+            if current_index >= len(path):
                 print("reach")
-                pg.update(root)
-                root.save()
-                root.save(
+                pg.update(tn)
+                tn.save()
+                tn.save(
                     f'{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json.gz'
                 )
                 fusion_detection.renderPointCloud(
                     all_points + all_paths, all_colors + all_path_colors
                 )
-                p = pg.get_path(root.query(start), root.query(target))
+                p = pg.get_path(tn.query(start_point), tn.query(target))
                 cp = pg.interpolation_center(p)
-                for i in range(4):
-                    _, sp = root.path_smoothing(cp, [ml / 3 for ml in root.min_length])
-                    if not _:
-                        break
-                root.render3(with_path=sp, with_coordinate=False, show_now=0)
+                _, sp = tn.path_smoothing(cp, [ml / 3 for ml in tn.min_length])
+                tn.render3(with_path=sp, with_coordinate=False, show_now=0)
                 break
+
+
+if __name__ == "__main__":
+    main()

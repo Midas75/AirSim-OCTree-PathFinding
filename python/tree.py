@@ -359,7 +359,7 @@ class TreeNode:
             return self
         direction = self.get_direction(point, True)
         if direction in self.child:
-            return self.child[direction].query(point, nearest_on_oor)
+            return self.child[direction].query(point, True)
         return self
 
     def query_i(
@@ -371,11 +371,12 @@ class TreeNode:
             return self
         direction = self.get_direction_i(point, nearest_on_oor)
         if direction in self.child:
-            return self.child[direction].query_i(point, nearest_on_oor)
+            return self.child[direction].query_i(point, True)
         return self
 
     def clear_as(self, state: Literal[0, 1, 2] = EMPTY) -> None:
-        self.child.clear()
+        if self.child is not None:
+            self.child.clear()
         self.state = state
         self.known = False
         self.is_leaf = True
@@ -622,7 +623,7 @@ class TreeNode:
                 else:
                     cnode.dynamic_culling -= 1
                 if cnode.dynamic_culling == 0:
-                    cnode.clear()
+                    cnode.clear_as(self.EMPTY)
                     cnode.dynamic_culling = TreeNode.dynamic_culling
             visit.add(cnode.id)
             self.add(current, empty=True)
@@ -1261,7 +1262,7 @@ class TreeTest:
     @staticmethod
     def raycast_benchmark_test():
         tn = TreeNode().as_root([0, 0], [640, 640], [2, 2])
-        number = 501
+        number = 500
         start = time.perf_counter()
         for i in range(number):
             p = [
