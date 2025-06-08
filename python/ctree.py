@@ -261,7 +261,7 @@ class CTreeNode:
             return None
         return CTreeNode(result)
 
-    def clear_as(self, state: Literal[0, 1, 2]) -> None:
+    def clear_as(self, state: Literal[0, 1, 2] = 0) -> None:
         return self._c.clear_as(state)
 
     def cross_lca(

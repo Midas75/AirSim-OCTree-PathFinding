@@ -386,26 +386,14 @@ class TreeNode:
             parent = parent.parent
 
     def lca(self, node1: TreeNode, node2: TreeNode) -> TreeNode:
-        node1chain = list[TreeNode]()
-        node2chain = list[TreeNode]()
-        node1p = node1
-        node2p = node2
-        while node1p is not None:
-            node1chain.append(node1p)
-            node1p = node1p.parent
-        while node2p is not None:
-            node2chain.append(node2p)
-            node2p = node2p.parent
-        node1chain.reverse()
-        node2chain.reverse()
-        min_len = min(len(node1chain), len(node2chain))
-        lca_node = None
-        for i in range(min_len):
-            if node1chain[i] is node2chain[i]:
-                lca_node = node1chain[i]
-            else:
-                break
-        return lca_node
+        p1 = node1
+        p2 = node2
+        while p1 != p2:
+            p1 = node2 if p1 is None else p1.parent
+            p2 = node1 if p2 is None else p2.parent
+        if p1 is None:
+            return self
+        return p1
 
     def cross_self(
         self, start: list[float], inv_vector: list[float], expand: list[float]
@@ -422,7 +410,7 @@ class TreeNode:
                 t1 = (b_min - start[dim]) * inv_vector[dim]
                 t2 = (b_max - start[dim]) * inv_vector[dim]
                 # pylint: disable=R1731  # if is faster than min
-                # pylint: disable=R1730  # if is faster than min
+                # pylint: disable=R1730  # if is faster than max
                 if t1 < t2:
                     if tmin < t1:
                         tmin = t1

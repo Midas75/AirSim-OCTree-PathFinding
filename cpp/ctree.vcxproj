@@ -124,12 +124,10 @@
     </Link>
   </ItemDefinitionGroup>
   <ItemGroup>
-    <ClCompile Include="memory_leak_test.cpp" />
-    <ClCompile Include="pathgraph_test.cpp" />
-    <ClCompile Include="ray3d_test.cpp" />
+    <ClInclude Include="ctree.hpp" />
   </ItemGroup>
   <ItemGroup>
-    <ClInclude Include="ctree.hpp" />
+    <ClCompile Include="test.cpp" />
   </ItemGroup>
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />
   <ImportGroup Label="ExtensionTargets">

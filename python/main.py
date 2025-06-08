@@ -24,7 +24,6 @@ pg_cls = CPathGraph
 def get_path(
     root: tn_cls, pg: pg_cls, current: list[float], target: list[float]
 ) -> list[tuple[float, float, float]]:
-    print("getting path...  ", end="")
     expand = [ml / 3 for ml in root.min_length]
     start = time.perf_counter()
     current_node = root.query(current, True)
@@ -34,10 +33,7 @@ def get_path(
     path = pg.get_path(current_node, target_node)
     c_path = [current] + pg.interpolation_center(path) + [target]
     _, s_path = root.path_smoothing(c_path, expand)
-    print(
-        f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms, "
-        f"start: {current} end: {target}"
-    )
+    print(f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms")
     return s_path
 
 
@@ -119,7 +115,7 @@ def fly_to(
         yaw_mode=airsim.YawMode(True, yaw_offset),
     )
     if not result:
-        print("updating...", end="")
+        print("updating...")
         start = time.perf_counter() * 1000
         pg.update(root)
         print(f"update cost {time.perf_counter()*1000-start:.2f}ms")
@@ -160,7 +156,6 @@ def main():
         tn = tn_cls.load("TreeNode.json.gz")
     else:
         tn = tn_cls().as_root([-x, 1, -z], [x, y, z], ml)
-    print(tn.dims)
     # target = (-297, 12.65, 246.5)
     target = (71, 12, 83)
     start_time = time.perf_counter()
