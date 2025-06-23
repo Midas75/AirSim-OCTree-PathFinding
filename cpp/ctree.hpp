@@ -111,7 +111,7 @@ namespace ctree
         }
         static ConstPtr deserialize(const TreeData &tree_data, const std::vector<TreeNodeData> &tree_node_datas,
                                     const std::unordered_map<long, size_t> &_tree_nodes_map,
-                                    long _current_id = 0, ConstPtrRef _parent = Nullptr)
+                                    long _current_id = 0, ConstPtr _parent = Nullptr)
         {
             Ptr node;
             bool is_root = false;
@@ -496,7 +496,7 @@ namespace ctree
                 parent = parent->parent;
             }
         }
-        static const std::shared_ptr<const TreeNode> lca(ConstPtrRef node1, ConstPtrRef node2)
+        static const std::shared_ptr<const TreeNode> lca(ConstPtr node1, ConstPtr node2)
         {
             auto p1 = node1.get();
             auto p2 = node2.get();
@@ -596,7 +596,7 @@ namespace ctree
             }
             return TreeNode::lca(n1, n2)->cross(start, inv_vector, expand);
         }
-        static const std::shared_ptr<const TreeNode> get_parent(ConstPtrRef self, int number = 1)
+        static const std::shared_ptr<const TreeNode> get_parent(ConstPtr self, int number = 1)
         {
             auto parent = self.get();
             for (int i = 0; i < number; i++)
@@ -612,7 +612,7 @@ namespace ctree
             }
             return parent->shared_from_this();
         }
-        bool intersect(ConstPtrRef other) const
+        bool intersect(ConstPtr other) const
         {
             bool one_eq = false;
             for_dims(this)
@@ -884,7 +884,7 @@ namespace ctree
             }
             return;
         }
-        uint8_t contact_with(ConstPtrRef other) const
+        uint8_t contact_with(ConstPtr other) const
         {
             uint8_t result = 0;
             for_dims(this)
@@ -900,7 +900,7 @@ namespace ctree
             result |= 1;
             return result;
         }
-        bool contact_center(ConstPtrRef other, std::array<float, TREE_DIM> &out_center) const
+        bool contact_center(ConstPtr other, std::array<float, TREE_DIM> &out_center) const
         {
             auto cw = this->contact_with(other);
             if (!(cw & 1))
@@ -983,10 +983,10 @@ namespace ctree
         const long id;
         const int dims;
         std::unordered_set<std::pair<long, long>, pair_hash_ll> edges;
-        TreeNode::ConstPtrRef tree_node;
+        TreeNode::ConstPtr tree_node;
         float f = 0, g = 0, h = 0;
         long from_node = 0;
-        PathNode(TreeNode::ConstPtrRef tree_node) : tree_node(tree_node), id(tree_node->id), dims(tree_node->dims)
+        PathNode(TreeNode::ConstPtr tree_node) : tree_node(tree_node), id(tree_node->id), dims(tree_node->dims)
         {
         }
         float distance(std::shared_ptr<PathNode> &other, bool unknown_penalty = true) const
@@ -1038,14 +1038,14 @@ namespace ctree
         std::unordered_map<std::pair<long, long>, std::shared_ptr<PathEdge>, pair_hash_ll> edges;
         TreeNode::Ptr last_root = nullptr;
         std::unordered_map<long, TreeNode::Ptr> now_leaves, last_leaves;
-        void add_node(TreeNode::ConstPtrRef tree_node)
+        void add_node(TreeNode::ConstPtr tree_node)
         {
             if (!this->nodes.count(tree_node->id))
             {
                 this->nodes.emplace(tree_node->id, std::make_shared<PathNode>(tree_node));
             }
         }
-        std::shared_ptr<PathNode> find_node(TreeNode::ConstPtrRef tree_node)
+        std::shared_ptr<PathNode> find_node(TreeNode::ConstPtr tree_node)
         {
             if (this->nodes.count(tree_node->id))
             {
@@ -1053,7 +1053,7 @@ namespace ctree
             }
             return nullptr;
         }
-        void add_edge(TreeNode::ConstPtrRef a, TreeNode::ConstPtrRef b)
+        void add_edge(TreeNode::ConstPtr a, TreeNode::ConstPtr b)
         {
             auto na = this->find_node(a);
             auto nb = this->find_node(b);
@@ -1064,7 +1064,7 @@ namespace ctree
             auto edge = std::make_shared<PathEdge>(na, nb);
             this->edges.emplace(edge->id, edge);
         }
-        void get_empty_leaves(TreeNode::ConstPtrRef tree_node, std::unordered_map<long, TreeNode::Ptr> &leaves)
+        void get_empty_leaves(TreeNode::ConstPtr tree_node, std::unordered_map<long, TreeNode::Ptr> &leaves)
         {
             if (tree_node->is_leaf && tree_node->state == TreeNode::EMPTY)
             {
@@ -1110,8 +1110,8 @@ namespace ctree
                 auto &tna = edge->a->tree_node;
                 auto &tnb = edge->b->tree_node;
 
-                bool a_expire = tna->state != TreeNode::EMPTY || (!tna->is_leaf);
-                bool b_expire = tnb->state != TreeNode::EMPTY || (!tnb->is_leaf);
+                bool a_expire = tna == nullptr || tna->state != TreeNode::EMPTY || (!tna->is_leaf);
+                bool b_expire = tnb == nullptr || tnb->state != TreeNode::EMPTY || (!tnb->is_leaf);
 
                 if (a_expire || b_expire)
                 {
@@ -1150,7 +1150,7 @@ namespace ctree
                 }
             }
         }
-        void update(TreeNode::ConstPtrRef root, bool full_reset = false)
+        void update(TreeNode::ConstPtr root, bool full_reset = false)
         {
             if (full_reset)
             {
@@ -1212,8 +1212,8 @@ namespace ctree
             }
             std::reverse(path_list.begin(), path_list.end());
         }
-        void get_path(TreeNode::ConstPtrRef tree_start,
-                      TreeNode::ConstPtrRef tree_end,
+        void get_path(TreeNode::ConstPtr tree_start,
+                      TreeNode::ConstPtr tree_end,
                       std::vector<TreeNode::Ptr> &out_path,
                       bool unknown_penalty = true)
         {
@@ -1234,7 +1234,7 @@ namespace ctree
             start->f = start->g + start->h;
             open_set.emplace(start);
             open_id_set.emplace(start->id);
-
+            
             while (open_set.size() > 0)
             {
                 iter_count += 1;
