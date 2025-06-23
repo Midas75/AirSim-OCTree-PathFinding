@@ -1200,7 +1200,6 @@ namespace ctree
         }
         void construct_path(std::shared_ptr<PathNode> current, std::vector<TreeNode::Ptr> &path_list)
         {
-
             while (true)
             {
                 path_list.emplace_back(current->tree_node);
@@ -1234,7 +1233,7 @@ namespace ctree
             start->f = start->g + start->h;
             open_set.emplace(start);
             open_id_set.emplace(start->id);
-            
+
             while (open_set.size() > 0)
             {
                 iter_count += 1;
@@ -1254,6 +1253,10 @@ namespace ctree
                 close_set.emplace(current->id);
                 for (auto &ll : current->edges)
                 {
+                    if(!this->edges.count(ll)){
+                        printf("unexpected no key in edges\n");
+                        continue;
+                    }
                     auto e = this->edges.at(ll);
                     auto neighbor = e->b;
                     if (current->id == neighbor->id)
@@ -1271,7 +1274,6 @@ namespace ctree
                         neighbor->h = neighbor->distance(end, unknown_penalty);
                         neighbor->f = neighbor->g + neighbor->h;
                         neighbor->from_node = current->id;
-
                         open_set.emplace(neighbor);
                         open_id_set.emplace(neighbor->id);
                     }
