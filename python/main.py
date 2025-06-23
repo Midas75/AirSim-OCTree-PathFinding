@@ -186,7 +186,7 @@ def main():
             if current_index >= len(path):
                 print("reach")
                 pg.update(tn)
-                tn.save()
+                tn.save("TreeNode.json.gz")
                 tn.save(
                     f'{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json.gz'
                 )
