@@ -16,7 +16,31 @@ void update_test()
 		pg.update(tn);
 	}
 }
+void hash_collide_test()
+{
+	std::unordered_set<std::pair<long, long>,ctree::pair_code_ll> set;
+	long test_range = 10000;
+	struct ctree::pair_code_ll hasher;
+	for (long i = test_range; i >0; i--)
+	{
+		for (long j = i; j >0; j--)
+		{
+			auto pair = std::make_pair(i, j);
+			auto id = hasher(pair);
+			if (set.count(pair))
+			{
+				printf("collided! %lld\n",id);
+				getchar();
+			}
+			else
+			{
+				set.emplace(pair);
+			}
+		}
+		printf("%ld\n", i);
+	}
+}
 void main()
 {
-	update_test();
+	hash_collide_test();
 }

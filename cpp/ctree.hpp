@@ -967,13 +967,14 @@ namespace ctree
             return changed;
         }
     };
-    struct pair_hash_ll
+    struct pair_code_ll
     {
         std::size_t operator()(const std::pair<long, long> &p) const
         {
-            std::size_t h1 = std::hash<long>{}(p.first);
-            std::size_t h2 = std::hash<long>{}(p.second);
-            return h1 ^ (h2 << 1);
+            std::size_t a = p.first, b = p.second;
+            std::size_t sum = a + b;
+            // Cantor pairing function
+            return (sum * (sum + 1)) / 2 + std::min(a, b);
         }
     };
 
@@ -982,7 +983,7 @@ namespace ctree
     public:
         const long id;
         const int dims;
-        std::unordered_set<std::pair<long, long>, pair_hash_ll> edges;
+        std::unordered_set<std::pair<long, long>, pair_code_ll> edges;
         TreeNode::ConstPtr tree_node;
         float f = 0, g = 0, h = 0;
         long from_node = 0;
@@ -1035,7 +1036,7 @@ namespace ctree
     {
     public:
         std::unordered_map<long, std::shared_ptr<PathNode>> nodes;
-        std::unordered_map<std::pair<long, long>, std::shared_ptr<PathEdge>, pair_hash_ll> edges;
+        std::unordered_map<std::pair<long, long>, std::shared_ptr<PathEdge>, pair_code_ll> edges;
         TreeNode::Ptr last_root = nullptr;
         std::unordered_map<long, TreeNode::Ptr> now_leaves, last_leaves;
         void add_node(TreeNode::ConstPtr tree_node)
@@ -1110,9 +1111,8 @@ namespace ctree
                 auto &tna = edge->a->tree_node;
                 auto &tnb = edge->b->tree_node;
 
-                bool a_expire = tna == nullptr || tna->state != TreeNode::EMPTY || (!tna->is_leaf);
-                bool b_expire = tnb == nullptr || tnb->state != TreeNode::EMPTY || (!tnb->is_leaf);
-
+                bool a_expire = !leaves.count(tna->id);
+                bool b_expire = !leaves.count(tnb->id);
                 if (a_expire || b_expire)
                 {
                     if (a_expire && !b_expire)
@@ -1136,9 +1136,9 @@ namespace ctree
             std::unordered_map<long, TreeNode::ConstPtr> neighbors;
             for (auto &kv : leaves)
             {
-                neighbors.clear();
                 if ((!this->last_leaves.count(kv.first)) || active_nodes.count(kv.first))
                 {
+                    neighbors.clear();
                     kv.second->get_neighbor(neighbors);
                     for (auto &nkv : neighbors)
                     {
@@ -1152,14 +1152,23 @@ namespace ctree
         }
         void update(TreeNode::ConstPtr root, bool full_reset = false)
         {
-            if (full_reset)
+            if ((root != this->last_root) || full_reset)
             {
+                printf("full_reset triggered! %p vs %p\n", root.get(), this->last_root.get());
+                this->last_root = root;
                 this->last_leaves.clear();
                 this->nodes.clear();
                 this->edges.clear();
                 this->now_leaves.clear();
                 this->get_empty_leaves(root, this->now_leaves);
-                this->get_edges(this->now_leaves);
+                if (full_reset)
+                {
+                    this->get_edges(this->now_leaves);
+                }
+                else
+                {
+                    this->get_edges_neighbor(this->now_leaves);
+                }
 
                 for (auto &kv : this->edges)
                 {
@@ -1168,12 +1177,7 @@ namespace ctree
                 }
                 return;
             }
-            if (root != this->last_root)
-            {
-                this->last_leaves.clear();
-                this->edges.clear();
-                this->nodes.clear();
-            }
+            this->last_root = root;
             this->now_leaves.clear();
             this->get_empty_leaves(root, this->now_leaves);
 
@@ -1195,7 +1199,7 @@ namespace ctree
                 kv.second->a->edges.emplace(kv.first);
                 kv.second->b->edges.emplace(kv.first);
             }
-            this->last_root = root;
+
             this->last_leaves = this->now_leaves;
         }
         void construct_path(std::shared_ptr<PathNode> current, std::vector<TreeNode::Ptr> &path_list)
@@ -1253,7 +1257,8 @@ namespace ctree
                 close_set.emplace(current->id);
                 for (auto &ll : current->edges)
                 {
-                    if(!this->edges.count(ll)){
+                    if (!this->edges.count(ll))
+                    {
                         printf("unexpected no key in edges\n");
                         continue;
                     }

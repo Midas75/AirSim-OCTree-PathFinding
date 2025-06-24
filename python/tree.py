@@ -981,6 +981,8 @@ class PathGraph:
                 return result
             close_set.add(current)
             for e in current.edges:
+                if e not in self.edges:
+                    print("unexpected no key in edges")
                 neighbor: PathNode = e.b if e.a == current else e.a
                 if neighbor in close_set:
                     continue
