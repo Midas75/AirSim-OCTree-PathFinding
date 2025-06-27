@@ -1154,7 +1154,6 @@ namespace ctree
         {
             if ((root != this->last_root) || full_reset)
             {
-                printf("full_reset triggered! %p vs %p\n", root.get(), this->last_root.get());
                 this->last_root = root;
                 this->last_leaves.clear();
                 this->nodes.clear();

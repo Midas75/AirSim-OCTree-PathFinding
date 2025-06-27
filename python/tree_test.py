@@ -137,7 +137,7 @@ class TreeTest:
             start = time.perf_counter()
             path = pg.get_path(tn.query([0, 0]), tn.query([50, 50]))
             print(f"get path cost: {(time.perf_counter()-start)*1000:.2f} ms")
-            c_path = pg.interpolation_center(path)
+            c_path = tn.interpolation_center(path)
             tn.render2(show_now=0, with_graph=pg, with_path=c_path)
             _, s_path = tn.path_smoothing(c_path, expand=tn.min_length)
             tn.render2(show_now=0, with_graph=pg, with_path=s_path)
@@ -165,7 +165,7 @@ class TreeTest:
         pg.update(tn)
         path = pg.get_path(tn.query([0, 0, 0]), tn.query([10, 10, 10]))
         r_path = [pn.tree_node.center for pn in path]
-        c_path = pg.interpolation_center(path)
+        c_path = tn.interpolation_center(path)
         _, s_path = tn.path_smoothing(c_path, expand=tn.min_length)
         print(f"update&path cost {1000*(time.perf_counter()-start):.2f} ms")
         print(r_path)
@@ -222,6 +222,7 @@ class TreeTest:
         moving_obstacle = [10, 0]
         obstacle_size = 2
         moving_speed = 0.5
+        pg = PathGraph()
         for _ in range(number):
             print(_)
             moving_obstacle[1] += moving_speed
@@ -237,8 +238,9 @@ class TreeTest:
                     and p[1] < moving_obstacle[1] + obstacle_size / 2
                 ):
                     p[0] = moving_obstacle[0]
-                tn.add_raycast([0, p[1]], p, False)
-            tn.render2(show_now=0)
+                tn.add_raycast([0, p[1]], p, False, 20)
+            pg.update(tn)
+            tn.render2(show_now=0, with_graph=pg)
 
     @staticmethod
     def raycast_benchmark_test():
@@ -252,3 +254,23 @@ class TreeTest:
             ]
             tn.add_raycast([0, 0], p, False)
         print(f"add_raycast {number} times cost {1000*(time.perf_counter()-start)} ms")
+
+
+if __name__ == "__main__":
+    tt = TreeTest
+    # tt.i_root_test()
+    # tt.add_test()
+    # tt.unbalance_test()
+    # tt.raycast_test()
+    # tt.path_node_id_test()
+    # tt.gen_id_test()
+    # tt.neighbor_test()
+    # tt.graph_test()
+    # tt.graph_update_test()
+    # tt.get_path_test()
+    # tt.render3_test()
+    # tt.octree_test()
+    # tt.serialize_deserialize_test()
+    # tt.save_load_test()
+    tt.dynamic_culling_test()
+    # tt.raycast_benchmark_test()

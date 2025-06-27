@@ -17,8 +17,8 @@ all_points = []
 all_colors = []
 all_paths = []
 all_path_colors = []
-tn_cls = CTreeNode
-pg_cls = CPathGraph
+tn_cls = TreeNode
+pg_cls = PathGraph
 
 
 def get_path(
@@ -31,7 +31,7 @@ def get_path(
     if current_node is None or target_node is None:
         print("is none", current, target)
     path = pg.get_path(current_node, target_node)
-    c_path = [current] + pg.interpolation_center(path) + [target]
+    c_path = [current] + root.interpolation_center(path) + [target]
     _, s_path = root.path_smoothing(c_path, expand)
     print(f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms")
     return s_path
@@ -194,7 +194,7 @@ def main():
                     all_points + all_paths, all_colors + all_path_colors
                 )
                 p = pg.get_path(tn.query(start_point), tn.query(target))
-                cp = pg.interpolation_center(p)
+                cp = tn.interpolation_center(p)
                 _, sp = tn.path_smoothing(cp, [ml / 3 for ml in tn.min_length])
                 tn.render3(with_path=sp, with_coordinate=False, show_now=0)
                 break

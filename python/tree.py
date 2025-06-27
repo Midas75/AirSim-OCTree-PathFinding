@@ -372,7 +372,7 @@ class TreeNode:
 
     def clear_as(self, state: Literal[0, 1, 2] = EMPTY) -> None:
         if self.child is not None:
-            self.child.clear()
+            self.child = None
         self.state = state
         self.known = False
         self.is_leaf = True
@@ -663,6 +663,18 @@ class TreeNode:
                     center[dim] = self.center[dim] - self.bound_size[dim] / 2
         return center
 
+    def interpolation_center(self, path: list[TreeNode]) -> list[list[float]]:
+        result = list[list[float]]()
+        if len(path) <= 0:
+            return result
+        result.append(path[0].center)
+        for i in range(1, len(path)):
+            f = path[i - 1]
+            t = path[i]
+            result.append(f.contact_center(t))
+            result.append(t.center)
+        return result
+
     def render2(
         self,
         width: int = 720,
@@ -705,7 +717,7 @@ class TreeNode:
 
         if is_root:
             if with_graph is not None:
-                for edge in with_graph.edges:
+                for _, edge in with_graph.edges.items():
                     ca = edge.a.tree_node.i_center
                     cb = edge.b.tree_node.i_center
                     pa = (
@@ -784,10 +796,10 @@ class TreeNode:
 
 class PathNode:
     id: int
-    edges: set[PathEdge]
+    edges: set[tuple[int, int]]
     tree_node: TreeNode
     f: float
-    g: float
+    g: float = float("inf")
     h: float
     from_node: PathNode = None
 
@@ -795,9 +807,8 @@ class PathNode:
         self.tree_node = tree_node
         self.id = tree_node.id
         self.f = 0
-        self.g = 0
         self.h = 0
-        self.edges = set[PathEdge]()
+        self.edges = set[tuple[int, int]]()
 
     def distance(self, other: PathNode, unknown_penalty: bool = True) -> float:
         up_factor = 0.2
@@ -823,11 +834,16 @@ class PathEdge:
     id: tuple[int, int]
     hash: int
 
+    @staticmethod
+    def pair_code_ll(pair: tuple[int, int]) -> int:
+        sum_pair = pair[0] + pair[1]
+        return (sum_pair * (sum_pair + 1)) // 2 + min(*pair)
+
     def __init__(self, a: PathNode, b: PathNode):
         self.a = a
         self.b = b
         self.id = min(a.id, b.id), max(a.id, b.id)
-        self.hash = self.id.__hash__()
+        self.hash = PathEdge.pair_code_ll(self.id)
 
     def __eq__(self, value: object):
         return self.id == value.id
@@ -837,6 +853,161 @@ class PathEdge:
 
 
 class PathGraph:
+    nodes: dict[int, PathNode]
+    edges: dict[tuple[int, int], PathEdge]
+    last_root: TreeNode = None
+    last_leaves: set[TreeNode] = None
+
+    def __init__(self) -> None:
+        self.nodes = dict[int, PathNode]()
+        self.edges = dict[tuple[int, int], PathEdge]()
+        self.last_leaves = set[TreeNode]()
+
+    def add_node(self, tree_node: TreeNode) -> PathNode:
+        if tree_node.id not in self.nodes:
+            pn = self.nodes[tree_node.id] = PathNode(tree_node)
+            return pn
+        return self.nodes[tree_node.id]
+
+    def remove_node(self, node_id: int, remove_edge: bool = True) -> None:
+        if node_id in self.nodes:
+            pn = self.nodes[node_id]
+            del self.nodes[node_id]
+            if remove_edge:
+                for edge_id in pn.edges:
+                    e = self.edges[edge_id]
+                    del e.a.edges[edge_id]
+                    del e.b.edges[edge_id]
+
+    def add_edge(self, a: TreeNode, b: TreeNode) -> None:
+        pn1 = self.add_node(a)
+        pn2 = self.add_node(b)
+        edge_id = (pn1.id, pn2.id)
+        if edge_id not in self.edges:
+            pe = PathEdge(pn1, pn2)
+            self.edges[edge_id] = pe
+            pn1.edges.add(edge_id)
+            pn2.edges.add(edge_id)
+
+    def remove_edge(self, edge_id: tuple[int, int]) -> None:
+        if edge_id in self.edges:
+            pe = self.edges[edge_id]
+            del self.edges[edge_id]
+            pe.a.edges.remove(edge_id)
+            pe.b.edges.remove(edge_id)
+
+    def update(self, root: TreeNode, full_reset: bool = False) -> None:
+        now_leaves = self.get_empty_leaves(root)
+        if (root is not self.last_root) or full_reset:
+            self.last_leaves.clear()
+            if full_reset:
+                self.update_edges(now_leaves)
+            else:
+                self.update_edges_neighbor(now_leaves)
+            self.last_root = root
+        else:
+            self.update_edges_neighbor(now_leaves)
+        self.last_leaves = now_leaves
+
+    def get_empty_leaves(
+        self, tree_node: TreeNode, leaves: set[TreeNode] = None
+    ) -> set[TreeNode]:
+        if leaves is None:
+            leaves = set[TreeNode]()
+        if tree_node.is_leaf and tree_node.state == tree_node.EMPTY:
+            leaves.add(tree_node)
+        elif tree_node.state != tree_node.FULL and tree_node.child is not None:
+            for direction in tree_node.child:
+                self.get_empty_leaves(tree_node.child[direction], leaves)
+        return leaves
+
+    def update_edges(self, leaves: set[TreeNode]):
+        self.nodes.clear()
+        self.edges.clear()
+        leaves_list = list(leaves)
+        for i, leaf in enumerate(leaves_list):
+            for j in range(i + 1, len(leaves_list)):
+                leaf2 = leaves_list[j]
+                if leaf.intersect(leaf2):
+                    self.add_edge(leaf, leaf2)
+
+    def update_edges_neighbor(self, leaves: set[TreeNode]):
+        expire_edge_ids = set[tuple[int, int]]()
+        active_nodes = set[TreeNode]()
+        for edge_id, e in self.edges.items():
+            tna = e.a.tree_node
+            tnb = e.b.tree_node
+            a_expire = tna not in leaves
+            b_expire = tnb not in leaves
+            if a_expire or b_expire:
+                expire_edge_ids.add(edge_id)
+            if a_expire:
+                self.remove_node(tna.id, False)
+                if not b_expire:
+                    active_nodes.add(tnb)
+            if b_expire:
+                self.remove_node(tnb.id, False)
+                if not a_expire:
+                    active_nodes.add(tna)
+        for edge_id in expire_edge_ids:
+            self.remove_edge(edge_id)
+        for leaf in leaves:
+            if (leaf in active_nodes) or (leaf.id not in self.last_leaves):
+                neighbors = leaf.get_neighbor()
+                for neighbor in neighbors:
+                    if neighbor in leaves:
+                        self.add_edge(leaf, neighbor)
+
+    def get_path(
+        self, tree_start: TreeNode, tree_end: TreeNode, unknown_penalty: bool = True
+    ) -> list[TreeNode]:
+        result = list[TreeNode]()
+        start = self.nodes.get(tree_start.id, None)
+        end = self.nodes.get(tree_end.id, None)
+        if start is None or end is None:
+            return result
+        iter_count = 0
+        max_iter_limit = 100_000
+        open_set = SortedSet[PathNode](key=lambda o: o.f)
+        close_set = set[PathNode]()
+        start.g = 0
+        start.h = start.distance(end, unknown_penalty)
+        start.f = start.g + start.h
+        start.from_node = None
+        open_set.add(start)
+
+        while len(open_set) > 0:
+            iter_count += 1
+            if iter_count > max_iter_limit:
+                self.construct_path(start, result)
+                return result
+            current: PathNode = open_set.pop(0)
+            if current == end:
+                self.construct_path(current, result)
+                return result
+            close_set.add(current)
+            for eid in current.edges:
+                e = self.edges[eid]
+                neighbor: PathNode = e.b if e.a == current else e.a
+                if neighbor in close_set:
+                    continue
+                g_score = current.g + current.distance(neighbor, unknown_penalty)
+                if g_score < neighbor.g or neighbor not in open_set:
+                    neighbor.g = g_score
+                    neighbor.h = neighbor.distance(end, unknown_penalty)
+                    neighbor.f = neighbor.g + neighbor.h
+                    neighbor.from_node = current
+                    open_set.add(neighbor)
+        return result
+
+    def construct_path(self, current: PathNode, path_list: list[TreeNode]):
+        while current is not None:
+            path_list.append(current.tree_node)
+            current = current.from_node
+        path_list.reverse()
+
+
+class _PathGraph:
     nodes: dict[int, PathNode]
     edges: set[PathEdge]
     last_root: TreeNode = None
@@ -865,13 +1036,16 @@ class PathGraph:
         return self.nodes.get(tree_node.id, None)
 
     def update(self, root: TreeNode, full_reset: bool = False) -> None:
-        if full_reset:
+        if (root is not self.last_root) or full_reset:
+            self.last_root = root
             self.last_leaves.clear()
             self.nodes.clear()
             self.edges.clear()
             now_leaves = self.get_empty_leaves(root)
-            self.get_edges(now_leaves)
-
+            if full_reset:
+                self.get_edges(now_leaves)
+            else:
+                self.get_edges_neighbor(now_leaves)
             for e in self.edges:
                 self.find_node(e.a.tree_node).edges.add(e)
                 self.find_node(e.b.tree_node).edges.add(e)
