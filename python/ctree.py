@@ -14,7 +14,7 @@ import gzip
 
 from numpy import ones, ndarray, uint8
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
-from cppyy import cppdef, include, gbl, addressof
+from cppyy import cppdef, include, gbl, addressof, set_debug
 from open3d import geometry, utility, visualization
 
 try:
@@ -35,7 +35,10 @@ _TREENODE_DATA_STD_VECTOR = None
 
 
 def init_ctree(
-    c_tree_dim: int = 3, cache_c_tree_props: bool = True, warm_up: bool = True
+    c_tree_dim: int = 3,
+    cache_c_tree_props: bool = True,
+    warm_up: bool = True,
+    debug: bool = False,
 ):
     start = perf_counter()
     global C_TREE_DIM, CACHE_C_TREE_PROPS  # pylint: disable=global-statement
@@ -43,13 +46,15 @@ def init_ctree(
     global _TREENODE_DATA_STD_VECTOR  # pylint: disable=global-statement
     C_TREE_DIM = c_tree_dim
     CACHE_C_TREE_PROPS = cache_c_tree_props
+    if debug:
+        set_debug()
     cppdef(f"#define TREE_DIM {C_TREE_DIM}")
     include(f"{os.path.dirname(__file__)}/../cpp/ctree.hpp")
     _F_STD_ARRAY = gbl.std.array["float", C_TREE_DIM]
     _I_STD_ARRAY = gbl.std.array["int", C_TREE_DIM]
     _TREENODE_STD_VECTOR = gbl.std.vector[gbl.ctree.TreeNode.Ptr]
     _FARRAY_STD_VECTOR = gbl.std.vector[_F_STD_ARRAY]
-    _LL_STD_PAIR = gbl.std.pair["long", "long"]
+    _LL_STD_PAIR = gbl.std.pair["std::uint32_t", "std::uint32_t"]
     _TREENODE_DATA_STD_VECTOR = gbl.std.vector[gbl.ctree.TreeNodeData]
     print(f"init cost {1000*(perf_counter()-start)} ms")
     if warm_up:
@@ -132,6 +137,7 @@ class CTreeNode:
     _min_length: list[float] = None
     _dims: int = None
     _ctncw: CTreeNodeChildWrapper = None
+    _id: int = None
 
     @staticmethod
     def warm_up():
@@ -396,6 +402,23 @@ class CTreeNode:
             return None
         return self._ctncw
 
+    @property
+    def id(self) -> int:
+        if (not CACHE_C_TREE_PROPS) or (self._id is None):
+            self._id = self._c.id
+        return self._id
+
+    def interpolation_center(self, path: list[CTreeNode]) -> list[list[float]]:
+        if len(path) < 1:
+            return []
+        fsv = _FARRAY_STD_VECTOR()
+        tsv = _TREENODE_STD_VECTOR(
+            [p._c for p in path]  # pylint: disable=protected-access
+        )
+        dims = path[0].dims
+        self._c.interpolation_center(tsv, fsv)
+        return [list(item)[:dims] for item in fsv]
+
     def render2(
         self,
         width: int = 720,
@@ -563,18 +586,9 @@ class CPathGraph:
             std_vector,
             unknown_penalty,
         )
-        return [CTreeNode(_c) for _c in std_vector]
-
-    def interpolation_center(self, path: list[CTreeNode]) -> list[list[float]]:
-        if len(path) < 1:
-            return []
-        fsv = _FARRAY_STD_VECTOR()
-        tsv = _TREENODE_STD_VECTOR(
-            [p._c for p in path]  # pylint: disable=protected-access
-        )
-        dims = path[0].dims
-        self._c.interpolation_center(tsv, fsv)
-        return [list(item)[:dims] for item in fsv]
+        if std_vector.size() > 0:
+            return [CTreeNode(_c) for _c in std_vector]
+        return []
 
     @property
     def edges(self) -> CPathEdgeWrapper:
@@ -722,7 +736,7 @@ class CTreeNodeTest:
         tn.add_raycast([0, 0], [25, 49])
         pg.update(tn)
         path = pg.get_path(tn.query([0, 0], True), tn.query([50, 50], True))
-        c_path = pg.interpolation_center(path)
+        c_path = tn.interpolation_center(path)
         _, s_path = tn.path_smoothing(c_path)
         tn.render2(show_now=0, with_graph=pg, with_path=s_path)
 
@@ -811,4 +825,4 @@ class CTreeNodeTest:
 
 if __name__ == "__main__":
     init_ctree()
-    CTreeNodeTest.ray3d_test()
+    CTreeNodeTest.render2_pathgraph_test()

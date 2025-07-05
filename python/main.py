@@ -17,8 +17,10 @@ all_points = []
 all_colors = []
 all_paths = []
 all_path_colors = []
-tn_cls = TreeNode
-pg_cls = PathGraph
+# tn_cls = TreeNode
+# pg_cls = PathGraph
+tn_cls = CTreeNode
+pg_cls = CPathGraph
 
 
 def get_path(
@@ -30,8 +32,11 @@ def get_path(
     target_node = root.query(target, True)
     if current_node is None or target_node is None:
         print("is none", current, target)
+    print("getting path")
     path = pg.get_path(current_node, target_node)
+    print("interpolating center")
     c_path = [current] + root.interpolation_center(path) + [target]
+    print("smoothing path")
     _, s_path = root.path_smoothing(c_path, expand)
     print(f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms")
     return s_path
@@ -84,7 +89,7 @@ def fly_to(
         if not p[-1]:
             all_points.append((p[0], p[1], p[2]))
             all_colors.append(c)
-        root.add_raycast(list(current), [p[0], p[1], p[2]], p[-1], dynamic_culling=1000)
+        root.add_raycast(list(current), [p[0], p[1], p[2]], p[-1], dynamic_culling=-1)
     current_node = root.query(current, True)
     target_node = root.query(target, True)
     if current_node.state != root.EMPTY:
@@ -131,7 +136,7 @@ def fly_to(
 
 
 def main():
-    init_ctree()
+    init_ctree(debug=False)
     ac = airsim.MultirotorClient()
     time.sleep(1)
     ac.confirmConnection()
@@ -157,6 +162,7 @@ def main():
     else:
         tn = tn_cls().as_root([-x, 1, -z], [x, y, z], ml)
     # target = (-297, 12.65, 246.5)
+
     target = (71, 12, 83)
     start_time = time.perf_counter()
     print("first updating...")

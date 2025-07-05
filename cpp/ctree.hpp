@@ -8,7 +8,7 @@
 #include <array>
 #include <vector>
 #include <algorithm>
-#include <set>
+#include <queue>
 namespace ctree
 {
 #ifndef TREE_DIM
@@ -19,6 +19,7 @@ namespace ctree
 
     constexpr int8_t TREE_CHILDS = 1 << TREE_DIM;
     constexpr std::array<float, TREE_DIM> ZEROS = {0};
+    static const float INF = std::numeric_limits<float>::infinity();
     struct TreeData
     {
         float min_length[TREE_DIM] = {0}, bound_min[TREE_DIM] = {0}, bound_max[TREE_DIM] = {0};
@@ -26,8 +27,8 @@ namespace ctree
     };
     struct TreeNodeData
     {
-        long id = 0;
-        long child[TREE_CHILDS] = {0};
+        uint32_t id = 0;
+        uint32_t child[TREE_CHILDS] = {0};
         int i_bound_min[TREE_DIM] = {0}, i_bound_max[TREE_DIM] = {0};
         int8_t state = 0;
         bool known = false, is_leaf = false;
@@ -45,7 +46,7 @@ namespace ctree
         using PtrRef = Ptr &;
         using ConstPtrRef = ConstPtr &;
         inline static ConstPtrRef Nullptr = nullptr;
-        inline static const float INF = std::numeric_limits<float>::infinity();
+
         static const int8_t EMPTY = 0;
         static const int8_t FULL = 1;
         static const int8_t HALF_FULL = 2;
@@ -70,7 +71,7 @@ namespace ctree
                                   i_bound_max = {0},
                                   i_bound_size = {0},
                                   i_center = {0};
-        long id = 0;
+        uint32_t id = 0;
         void serialize(TreeData &out_tree_data, std::vector<TreeNodeData> &out_tree_node_data) const
         {
             out_tree_data.dims = this->dims;
@@ -101,17 +102,17 @@ namespace ctree
         }
         static ConstPtr deserialize(const TreeData &tree_data, const std::vector<TreeNodeData> &tree_node_datas)
         {
-            auto map = std::unordered_map<long, size_t>();
+            auto map = std::unordered_map<uint32_t, uint64_t>();
             map.reserve(tree_node_datas.size());
-            for (size_t i = 0; i < tree_node_datas.size(); i++)
+            for (uint64_t i = 0; i < tree_node_datas.size(); i++)
             {
                 map.emplace(tree_node_datas[i].id, i);
             }
             return deserialize(tree_data, tree_node_datas, map);
         }
         static ConstPtr deserialize(const TreeData &tree_data, const std::vector<TreeNodeData> &tree_node_datas,
-                                    const std::unordered_map<long, size_t> &_tree_nodes_map,
-                                    long _current_id = 0, ConstPtr _parent = Nullptr)
+                                    const std::unordered_map<uint32_t, uint64_t> &_tree_nodes_map,
+                                    uint32_t _current_id = 0, ConstPtr _parent = Nullptr)
         {
             Ptr node;
             bool is_root = false;
@@ -239,10 +240,10 @@ namespace ctree
             }
             return true;
         }
-        long gen_id() const
+        uint32_t gen_id() const
         {
-            long result = 0;
-            long dim_range = 1;
+            uint32_t result = 0;
+            uint32_t dim_range = 1;
             for_dims(this)
             {
                 result += dim_range * this->i_center[dim];
@@ -520,25 +521,27 @@ namespace ctree
                         const std::array<float, TREE_DIM> &inv_vector,
                         const std::array<float, TREE_DIM> &expand) const
         {
-            float tmin = -TreeNode::INF;
-            float tmax = TreeNode::INF;
+            float tmin = -INF;
+            float tmax = INF;
 
             for_dims(this)
             {
                 float b_min = this->bound_min[dim] - expand[dim];
                 float b_max = this->bound_max[dim] + expand[dim];
-                if (inv_vector[dim] == TreeNode::INF)
+                if (inv_vector[dim] == INF)
+                {
                     if (start[dim] < b_min || start[dim] > b_max)
                     {
                         return false;
                     }
-                    else
-                    {
-                        float t1 = (b_min - start[dim]) * inv_vector[dim];
-                        float t2 = (b_max - start[dim]) * inv_vector[dim];
-                        tmin = std::max(tmin, std::min(t1, t2));
-                        tmax = std::min(tmax, std::max(t1, t2));
-                    }
+                }
+                else
+                {
+                    float t1 = (b_min - start[dim]) * inv_vector[dim];
+                    float t2 = (b_max - start[dim]) * inv_vector[dim];
+                    tmin = std::max(tmin, std::min(t1, t2));
+                    tmax = std::min(tmax, std::max(t1, t2));
+                }
                 if (tmin > tmax)
                 {
                     return false;
@@ -587,7 +590,7 @@ namespace ctree
                 float v = end[dim] - start[dim];
                 if (v == 0)
                 {
-                    inv_vector[dim] = TreeNode::INF;
+                    inv_vector[dim] = INF;
                 }
                 else
                 {
@@ -745,16 +748,16 @@ namespace ctree
             const std::array<float, TREE_DIM> &vector,
             std::array<float, TREE_DIM> &out) const
         {
-            float t_min = -TreeNode::INF;
-            float t_max = TreeNode::INF;
+            float t_min = -INF;
+            float t_max = INF;
             int8_t out_dim = 0;
             for_dims(this)
             {
                 float t1, t2;
                 if (vector[dim] == 0)
                 {
-                    t1 = TreeNode::INF;
-                    t2 = TreeNode::INF;
+                    t1 = INF;
+                    t2 = INF;
                 }
                 else
                 {
@@ -802,7 +805,7 @@ namespace ctree
                 }
             }
             bool quit = false;
-            std::unordered_set<long> visit;
+            std::unordered_set<uint32_t> visit;
             while (true)
             {
                 auto cnode = this->query(current);
@@ -853,7 +856,7 @@ namespace ctree
                 current[out_dim] += this->min_length[out_dim] * sign[out_dim];
             }
         }
-        void get_neighbor(std::unordered_map<long, ConstPtr> &out_map) const
+        void get_neighbor(std::unordered_map<uint32_t, ConstPtr> &out_map) const
         {
             std::array<int, TREE_DIM> lower = {0}, upper = {0};
             for_dims(this)
@@ -934,6 +937,29 @@ namespace ctree
             }
             return true;
         }
+        void interpolation_center(
+            const std::vector<TreeNode::Ptr> &path,
+            std::vector<std::array<float, TREE_DIM>> &out_path) const
+        {
+            out_path.clear();
+            if (path.size() <= 0)
+            {
+                return;
+            }
+            out_path.emplace_back(path[0]->center);
+            for (int i = 1; i < path.size(); i++)
+            {
+                auto f = path.at(i - 1);
+                auto t = path.at(i);
+                std::array<float, TREE_DIM> center;
+                auto c = f->contact_center(t, center);
+                if (c)
+                {
+                    out_path.emplace_back(center);
+                }
+                out_path.emplace_back(t->center);
+            }
+        }
         bool path_smoothing(
             const std::vector<std::array<float, TREE_DIM>> &path,
             std::vector<std::array<float, TREE_DIM>> &out_path,
@@ -947,11 +973,11 @@ namespace ctree
             }
             out_path.clear();
             out_path.emplace_back(path[0]);
-            size_t size_1 = path.size() - 1;
-            size_t i = 0;
+            uint64_t size_1 = path.size() - 1;
+            uint64_t i = 0;
             while (i < size_1)
             {
-                size_t j = size_1;
+                uint64_t j = size_1;
                 while (j > i + 1)
                 {
                     if (!this->cross_lca(path[i], path[j], expand))
@@ -967,26 +993,22 @@ namespace ctree
             return changed;
         }
     };
-    struct pair_code_ll
+    std::uint64_t pair_code_ll(const std::pair<uint32_t, uint32_t> &p)
     {
-        std::size_t operator()(const std::pair<long, long> &p) const
-        {
-            std::size_t a = p.first, b = p.second;
-            std::size_t sum = a + b;
-            // Cantor pairing function
-            return (sum * (sum + 1)) / 2 + std::min(a, b);
-        }
+        std::uint64_t a = p.first, b = p.second;
+        // Cantor pairing function
+        std::uint64_t sum = a + b;
+        return (sum * (sum + 1)) / 2 + std::min(a, b);
     };
-
     class PathNode
     {
     public:
-        const long id;
+        const uint32_t id;
         const int dims;
-        std::unordered_set<std::pair<long, long>, pair_code_ll> edges;
+        std::unordered_set<std::uint64_t> edges;
         TreeNode::ConstPtr tree_node;
-        float f = 0, g = 0, h = 0;
-        long from_node = 0;
+        float f = 0, g = INF, h = 0;
+        uint32_t from_node = 0;
         PathNode(TreeNode::ConstPtr tree_node) : tree_node(tree_node), id(tree_node->id), dims(tree_node->dims)
         {
         }
@@ -1012,14 +1034,14 @@ namespace ctree
     {
         bool operator()(const std::shared_ptr<PathNode> &a, const std::shared_ptr<PathNode> &b) const
         {
-            return a->f < b->f;
+            return a->f > b->f;
         }
     };
     class PathEdge
     {
     public:
         const std::shared_ptr<PathNode> a, b;
-        std::pair<long, long> id;
+        std::pair<uint32_t, uint32_t> id;
         PathEdge(std::shared_ptr<PathNode> a, std::shared_ptr<PathNode> b) : a(a), b(b)
         {
             if (a->id < b->id)
@@ -1035,45 +1057,69 @@ namespace ctree
     class PathGraph
     {
     public:
-        std::unordered_map<long, std::shared_ptr<PathNode>> nodes;
-        std::unordered_map<std::pair<long, long>, std::shared_ptr<PathEdge>, pair_code_ll> edges;
+        std::unordered_map<uint32_t, std::shared_ptr<PathNode>> nodes;
+        std::unordered_map<std::uint64_t, std::shared_ptr<PathEdge>> edges;
         TreeNode::Ptr last_root = nullptr;
-        std::unordered_map<long, TreeNode::Ptr> now_leaves, last_leaves;
-        void add_node(TreeNode::ConstPtr tree_node)
+        std::unordered_map<uint32_t, TreeNode::Ptr> now_leaves, last_leaves;
+
+        uint32_t add_node(TreeNode::ConstPtrRef tree_node)
         {
             if (!this->nodes.count(tree_node->id))
             {
                 this->nodes.emplace(tree_node->id, std::make_shared<PathNode>(tree_node));
             }
+            return tree_node->id;
         }
-        std::shared_ptr<PathNode> find_node(TreeNode::ConstPtr tree_node)
+
+        void remove_node(uint32_t node_id, bool remove_edge = true)
         {
-            if (this->nodes.count(tree_node->id))
+            std::shared_ptr<PathNode> pn;
+            if (this->nodes.count(node_id))
             {
-                return this->nodes.at(tree_node->id);
+                pn = this->nodes.at(node_id);
+                this->nodes.erase(node_id);
+                if (remove_edge)
+                {
+                    for (auto &edge_id : pn->edges)
+                    {
+                        auto &e = this->edges.at(edge_id);
+                        e->a->edges.erase(edge_id);
+                        e->b->edges.erase(edge_id);
+                    }
+                }
             }
-            return nullptr;
         }
-        void add_edge(TreeNode::ConstPtr a, TreeNode::ConstPtr b)
+        void add_edge(TreeNode::ConstPtrRef a, TreeNode::ConstPtrRef b)
         {
-            auto na = this->find_node(a);
-            auto nb = this->find_node(b);
-            if (na == nullptr || nb == nullptr || na->id == nb->id)
+            auto edge_id = pair_code_ll(std::make_pair(a->id, b->id));
+            if (!this->edges.count(edge_id))
             {
-                return;
+                this->add_node(a);
+                this->add_node(b);
+                auto pn1 = this->nodes.at(a->id);
+                auto pn2 = this->nodes.at(b->id);
+                this->edges.emplace(edge_id, std::make_shared<PathEdge>(pn1, pn2));
+                pn1->edges.emplace(edge_id);
+                pn2->edges.emplace(edge_id);
             }
-            auto edge = std::make_shared<PathEdge>(na, nb);
-            this->edges.emplace(edge->id, edge);
         }
-        void get_empty_leaves(TreeNode::ConstPtr tree_node, std::unordered_map<long, TreeNode::Ptr> &leaves)
+        void remove_edge(const std::uint64_t edge_id)
+        {
+            if (this->edges.count(edge_id))
+            {
+                auto &pe = this->edges.at(edge_id);
+                this->edges.erase(edge_id);
+                pe->a->edges.erase(edge_id);
+                pe->b->edges.erase(edge_id);
+            }
+        }
+        void get_empty_leaves(TreeNode::ConstPtrRef tree_node, std::unordered_map<uint32_t, TreeNode::Ptr> &leaves)
         {
             if (tree_node->is_leaf && tree_node->state == TreeNode::EMPTY)
             {
                 leaves.emplace(tree_node->id, tree_node);
-                this->add_node(tree_node);
-                return;
             }
-            if (!tree_node->no_child)
+            else if (tree_node->state != TreeNode::FULL && !tree_node->no_child)
             {
                 for (int i = 0; i < TREE_CHILDS; i++)
                 {
@@ -1085,7 +1131,7 @@ namespace ctree
             }
             return;
         }
-        void get_edges(std::unordered_map<long, TreeNode::Ptr> &leaves)
+        void update_edges(std::unordered_map<uint32_t, TreeNode::Ptr> &leaves)
         {
             for (auto pair1 : leaves)
             {
@@ -1102,30 +1148,34 @@ namespace ctree
                 }
             }
         }
-        void get_edges_neighbor(std::unordered_map<long, TreeNode::Ptr> &leaves)
+        void update_edges_neighbor(std::unordered_map<uint32_t, TreeNode::Ptr> &leaves)
         {
-            std::unordered_set<long> active_nodes;
+            std::unordered_set<uint32_t> active_nodes;
             for (auto it = this->edges.begin(); it != this->edges.end();)
             {
-                auto &edge = it->second;
-                auto &tna = edge->a->tree_node;
-                auto &tnb = edge->b->tree_node;
-
+                auto &e = it->second;
+                auto &tna = e->a->tree_node;
+                auto &tnb = e->b->tree_node;
                 bool a_expire = !leaves.count(tna->id);
                 bool b_expire = !leaves.count(tnb->id);
-                if (a_expire || b_expire)
+                if (a_expire)
                 {
-                    if (a_expire && !b_expire)
+                    this->remove_node(tna->id, false);
+                    if (!b_expire)
                     {
-                        edge->b->edges.erase(it->first);
                         active_nodes.emplace(tnb->id);
                     }
-                    if (b_expire && !a_expire)
+                }
+                if (b_expire)
+                {
+                    this->remove_node(tnb->id, false);
+                    if (!a_expire)
                     {
-                        edge->a->edges.erase(it->first);
                         active_nodes.emplace(tna->id);
                     }
-
+                }
+                if (a_expire || b_expire)
+                {
                     it = this->edges.erase(it);
                 }
                 else
@@ -1133,10 +1183,11 @@ namespace ctree
                     ++it;
                 }
             }
-            std::unordered_map<long, TreeNode::ConstPtr> neighbors;
+
+            std::unordered_map<uint32_t, TreeNode::ConstPtr> neighbors;
             for (auto &kv : leaves)
             {
-                if ((!this->last_leaves.count(kv.first)) || active_nodes.count(kv.first))
+                if (active_nodes.count(kv.first) || (!this->last_leaves.count(kv.first)))
                 {
                     neighbors.clear();
                     kv.second->get_neighbor(neighbors);
@@ -1150,55 +1201,27 @@ namespace ctree
                 }
             }
         }
-        void update(TreeNode::ConstPtr root, bool full_reset = false)
+        void update(TreeNode::ConstPtrRef root, bool full_reset = false)
         {
-            if ((root != this->last_root) || full_reset)
-            {
-                this->last_root = root;
-                this->last_leaves.clear();
-                this->nodes.clear();
-                this->edges.clear();
-                this->now_leaves.clear();
-                this->get_empty_leaves(root, this->now_leaves);
-                if (full_reset)
-                {
-                    this->get_edges(this->now_leaves);
-                }
-                else
-                {
-                    this->get_edges_neighbor(this->now_leaves);
-                }
-
-                for (auto &kv : this->edges)
-                {
-                    this->find_node(kv.second->a->tree_node)->edges.emplace(kv.first);
-                    this->find_node(kv.second->b->tree_node)->edges.emplace(kv.first);
-                }
-                return;
-            }
-            this->last_root = root;
             this->now_leaves.clear();
             this->get_empty_leaves(root, this->now_leaves);
-
-            for (auto it = this->nodes.begin(); it != this->nodes.end();)
+            if ((root != this->last_root) || full_reset)
             {
-                if (!this->now_leaves.count(it->first))
+                this->last_leaves.clear();
+                if (full_reset)
                 {
-                    it = this->nodes.erase(it);
+                    this->update_edges(this->now_leaves);
                 }
                 else
                 {
-                    it->second->from_node = 0;
-                    ++it;
+                    this->update_edges_neighbor(this->now_leaves);
                 }
+                this->last_root = root;
             }
-            this->get_edges_neighbor(this->now_leaves);
-            for (auto &kv : this->edges)
+            else
             {
-                kv.second->a->edges.emplace(kv.first);
-                kv.second->b->edges.emplace(kv.first);
+                this->update_edges_neighbor(this->now_leaves);
             }
-
             this->last_leaves = this->now_leaves;
         }
         void construct_path(std::shared_ptr<PathNode> current, std::vector<TreeNode::Ptr> &path_list)
@@ -1220,29 +1243,37 @@ namespace ctree
                       bool unknown_penalty = true)
         {
             out_path.clear();
-            auto start = this->find_node(tree_start);
-            auto end = this->find_node(tree_end);
-
-            if (start == nullptr || end == nullptr)
+            auto start_it = this->nodes.find(tree_start->id);
+            auto end_it = this->nodes.find(tree_end->id);
+            if ((start_it == this->nodes.end()) || (end_it == this->nodes.end()))
             {
                 return;
             }
+            auto start = start_it->second;
+            auto end = end_it->second;
+
             int iter_count = 0, max_iter_limit = 100000;
-            std::set<std::shared_ptr<PathNode>, compare_f> open_set;
-            std::unordered_set<long> open_id_set;
-            std::unordered_set<long> close_set;
+            std::priority_queue<std::shared_ptr<PathNode>, std::vector<std::shared_ptr<PathNode>>, compare_f> open_heap;
+            std::unordered_set<uint32_t> open_set_ids;
+            std::unordered_set<uint32_t> close_set;
+
             start->g = 0;
             start->h = start->distance(end, unknown_penalty);
             start->f = start->g + start->h;
-            open_set.emplace(start);
-            open_id_set.emplace(start->id);
+            start->from_node = 0;
 
-            while (open_set.size() > 0)
+            open_heap.emplace(start);
+            open_set_ids.emplace(start->id);
+
+            while (open_heap.size() > 0)
             {
+
                 iter_count += 1;
-                auto current = *open_set.begin();
-                open_set.erase(open_set.begin());
-                open_id_set.erase(current->id);
+                auto current = open_heap.top();
+
+                open_heap.pop();
+                open_set_ids.erase(current->id);
+
                 if (iter_count > max_iter_limit)
                 {
                     this->construct_path(current, out_path);
@@ -1254,14 +1285,14 @@ namespace ctree
                     return;
                 }
                 close_set.emplace(current->id);
-                for (auto &ll : current->edges)
+                for (auto &eid : current->edges)
                 {
-                    if (!this->edges.count(ll))
+                    if (!this->edges.count(eid))
                     {
                         printf("unexpected no key in edges\n");
                         continue;
                     }
-                    auto e = this->edges.at(ll);
+                    auto &e = this->edges.at(eid);
                     auto neighbor = e->b;
                     if (current->id == neighbor->id)
                     {
@@ -1272,41 +1303,18 @@ namespace ctree
                         continue;
                     }
                     auto g_score = current->g + current->distance(neighbor, unknown_penalty);
-                    if (g_score < neighbor->g || (!open_id_set.count(neighbor->id)))
+                    if (g_score < neighbor->g || (!open_set_ids.count(neighbor->id)))
                     {
                         neighbor->g = g_score;
                         neighbor->h = neighbor->distance(end, unknown_penalty);
                         neighbor->f = neighbor->g + neighbor->h;
                         neighbor->from_node = current->id;
-                        open_set.emplace(neighbor);
-                        open_id_set.emplace(neighbor->id);
+                        open_heap.emplace(neighbor);
+                        open_set_ids.emplace(neighbor->id);
                     }
                 }
             }
             return;
-        }
-        void interpolation_center(
-            const std::vector<TreeNode::Ptr> &path,
-            std::vector<std::array<float, TREE_DIM>> &out_path) const
-        {
-            out_path.clear();
-            if (path.size() <= 0)
-            {
-                return;
-            }
-            out_path.emplace_back(path[0]->center);
-            for (int i = 1; i < path.size(); i++)
-            {
-                auto f = path.at(i - 1);
-                auto t = path.at(i);
-                std::array<float, TREE_DIM> center;
-                auto c = f->contact_center(t, center);
-                if (c)
-                {
-                    out_path.emplace_back(center);
-                }
-                out_path.emplace_back(t->center);
-            }
         }
     };
 #undef for_dims

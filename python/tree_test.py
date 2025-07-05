@@ -2,14 +2,20 @@ from math import cos, sin, pi
 import time
 
 import random
-from cv2 import imshow, waitKey  # pylint: disable=no-name-in-module
+from cv2 import imshow, waitKey, line  # pylint: disable=no-name-in-module
 from tree import TreeNode, PathNode, PathGraph
+from ctree import CTreeNode, CPathGraph, init_ctree
+
+tn_cls = CTreeNode
+pg_cls = CPathGraph
+if tn_cls == CTreeNode:
+    init_ctree()
 
 
 class TreeTest:
     @staticmethod
     def i_root_test():
-        tn = TreeNode()
+        tn = tn_cls()
         tn.as_root([0, 0, 0], [50, 50, 50], [5, 5, 5])
         print(f"i_center: {tn.i_center}")
         print(f"i_bound_size: {tn.i_bound_size}")
@@ -196,7 +202,7 @@ class TreeTest:
 
     @staticmethod
     def save_load_test():
-        tn = TreeNode().as_root([0, 0], [50, 50], [1, 1])
+        tn = tn_cls().as_root([0, 0], [50, 50], [1, 1])
         number = 50
         for i in range(number):
             p = [
@@ -209,20 +215,22 @@ class TreeTest:
         print(f"save cost {1000*(time.perf_counter()-start)} ms")
 
         start = time.perf_counter()
-        loaded = TreeNode.load()
+        loaded = tn_cls.load()
+        pg = pg_cls()
+        pg.update(loaded)
         print(f"load cost {1000*(time.perf_counter()-start)} ms")
         imshow("Raw", tn.render2())
-        imshow("New", loaded.render2())
+        imshow("New", loaded.render2(with_graph=pg))
         waitKey(0)
 
     @staticmethod
     def dynamic_culling_test():
-        tn = TreeNode().as_root([0, 0], [50, 50], [0.25, 0.25])
+        tn = tn_cls().as_root([0, 0], [50, 50], [0.25, 0.25])
         number = 500
         moving_obstacle = [10, 0]
         obstacle_size = 2
         moving_speed = 0.5
-        pg = PathGraph()
+        pg = pg_cls()
         for _ in range(number):
             print(_)
             moving_obstacle[1] += moving_speed
@@ -244,7 +252,7 @@ class TreeTest:
 
     @staticmethod
     def raycast_benchmark_test():
-        tn = TreeNode().as_root([0, 0], [640, 640], [2, 2])
+        tn = tn_cls().as_root([0, 0], [640, 640], [2, 2])
         number = 500
         start = time.perf_counter()
         for i in range(number):
@@ -254,6 +262,37 @@ class TreeTest:
             ]
             tn.add_raycast([0, 0], p, False)
         print(f"add_raycast {number} times cost {1000*(time.perf_counter()-start)} ms")
+
+    @staticmethod
+    def lca_test():
+        tn = tn_cls().as_root([0, 0], [20, 20], [1, 1])
+        number = 30
+        o_number = 10
+        start = time.perf_counter()
+        for i in range(o_number):
+            tn.add(
+                [random.random() * tn.bound_size[0], random.random() * tn.bound_size[1]]
+            )
+        im = tn.render2()
+        for i in range(number):
+            p = [
+                tn.bound_size[0] * sin(pi / 2 * i / number),
+                tn.bound_size[1] * cos(pi / 2 * i / number),
+            ]
+            cross = tn.cross_lca([0, 0], p, tn.min_length)
+            line(
+                im,
+                (0, 0),
+                (
+                    int(p[0] / tn.bound_size[0] * im.shape[0]),
+                    int(p[1] / tn.bound_size[1] * im.shape[1]),
+                ),
+                (0, 0, 255) if cross else (0, 255, 0),
+                1,
+            )
+        print(f"lca_test cost {1000*(time.perf_counter()-start)} ms")
+        imshow("lca_test", im)
+        waitKey(0)
 
 
 if __name__ == "__main__":
@@ -267,10 +306,11 @@ if __name__ == "__main__":
     # tt.neighbor_test()
     # tt.graph_test()
     # tt.graph_update_test()
-    # tt.get_path_test()
+    tt.get_path_test()
     # tt.render3_test()
     # tt.octree_test()
     # tt.serialize_deserialize_test()
     # tt.save_load_test()
-    tt.dynamic_culling_test()
+    # tt.dynamic_culling_test()
     # tt.raycast_benchmark_test()
+    # tt.lca_test()
