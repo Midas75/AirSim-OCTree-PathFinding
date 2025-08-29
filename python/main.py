@@ -1,209 +1,195 @@
-import time
-import math
+from time import perf_counter
 import os
 import datetime
+from asyncio import run
 
-import drone_request
-import fusion_detection
-import airsim
+from numpy import array, float16, clip, arccos, degrees
+from numpy.linalg import norm
 
-from msgpackrpc.future import Future
-
+from drone import ProjectAirSimDrone, IDrone
 from tree import PathGraph, TreeNode
-from ctree import CPathGraph, CTreeNode, init_ctree
 
+from ctree import CPathGraph, CTreeNode, init_ctree
+from tree_utils import VisWindow3
 
 all_points = []
 all_colors = []
 all_paths = []
 all_path_colors = []
-# tn_cls = TreeNode
-# pg_cls = PathGraph
-tn_cls = CTreeNode
-pg_cls = CPathGraph
+tn_cls = TreeNode
+pg_cls = PathGraph
+# tn_cls = CTreeNode
+# pg_cls = CPathGraph
 
 
 def get_path(
     root: tn_cls, pg: pg_cls, current: list[float], target: list[float]
-) -> list[tuple[float, float, float]]:
-    expand = [ml / 3 for ml in root.min_length]
-    start = time.perf_counter()
+) -> list[list[float]]:
+    start = perf_counter()
     current_node = root.query(current, True)
     target_node = root.query(target, True)
-    if current_node is None or target_node is None:
-        print("is none", current, target)
-    print("getting path")
     path = pg.get_path(current_node, target_node)
-    print("interpolating center")
     c_path = [current] + root.interpolation_center(path) + [target]
-    print("smoothing path")
-    _, s_path = root.path_smoothing(c_path, expand)
-    print(f"get path cost {time.perf_counter()*1000-start*1000:.2f}ms")
+    _, s_path = root.path_smoothing(
+        c_path, expand=[ml / 2 for ml in root.min_length], break_length=2
+    )
+    print(f"get path cost {perf_counter()*1000-start*1000:.2f}ms")
     return s_path
 
 
+def full_path_cross_check(root: tn_cls, path: list[list[float]]) -> bool:
+    for i in range(len(path) - 1):
+        if root.cross_lca(path[i], path[i + 1]):
+            return False
+    return True
+
+
 def fly_to(
-    ac: airsim.MultirotorClient,
-    dr: drone_request.DroneRequestClient,
+    d: ProjectAirSimDrone,
     root: tn_cls,
-    target: list[float],
     pg: pg_cls,
+    target: list[float],
     dt: float = 0.1,
     velocity: float = 5,
     accept_distance: float = 4,
 ) -> tuple[bool, bool]:
     result = True
-    att = dr.getAttitude(1)
-    current_forward = fusion_detection.getForward((att.rx, att.ry, att.rz, att.rw))
-    current_forward = fusion_detection.normalize(
-        (current_forward[0], 0, current_forward[2])
-    )
-    current = att.getPosition()
-    all_paths.append(current)
-    all_path_colors.append((1, 0, 0))
-    direction = [target[i] - current[i] for i in range(3)]
-    direction = fusion_detection.normalize(direction)
-    target_forward = fusion_detection.normalize((direction[0], 0, direction[2]))
-    cross_product = (
-        target_forward[0] * current_forward[0] + target_forward[2] * current_forward[2]
-    )
-    yaw_offset = math.acos(min(max(cross_product, -1), 1))
-    yaw_offset = math.degrees(yaw_offset)
-    if (
-        target_forward[0] * current_forward[2] - target_forward[2] * current_forward[0]
-        < 0
-    ):
-        yaw_offset = -yaw_offset
-    distance = fusion_detection.getV3Distance(current, target)
-    if distance / dt < velocity:
-        real_velocity = distance / dt
-    else:
-        real_velocity = velocity
+    target_arr = array(target, dtype=float16)
+    position, rotation = d.get_ground_truth_pose()
+    current = [float(p) for p in position]
+    current_forward = d.rotate_vectors(rotation)
+    current_forward[2] = 0
+    current_forward /= norm(current_forward)
+    direction = target_arr - position
+    target_forward = direction.copy()
+    distance = norm(direction)
+    direction /= distance
+    target_forward[2] = 0
+    target_forward /= norm(target_forward)
 
-    ps, cs = fusion_detection.getPointCloudPoints(
-        dr.getDepth(1), dr.getAttitude(1), dr.getImage(1), 100
+    cross_product = (
+        target_forward[0] * current_forward[0] + target_forward[1] * current_forward[1]
     )
-    for i, p in enumerate(ps):
-        p = ps[i]
-        c = cs[i]
-        if not p[-1]:
-            all_points.append((p[0], p[1], p[2]))
-            all_colors.append(c)
-        root.add_raycast(list(current), [p[0], p[1], p[2]], p[-1], dynamic_culling=-1)
+    yaw_offset = arccos(clip(cross_product, -1, 1))
+    yaw_offset = degrees(yaw_offset)
+    if distance / dt < velocity:
+        real_vel = distance / dt
+    else:
+        real_vel = velocity
+    point_cloud = d.get_lidar_data(ensure_new=True)
+    root.next_ray_batch()
+    for i, p in enumerate(point_cloud):
+        root.add_raycast(current, list(p))
     current_node = root.query(current, True)
     target_node = root.query(target, True)
-    if current_node.state != root.EMPTY:
-        current_node.clear_as()
+    # if current_node.state != root.EMPTY:
+    #     current_node.clear_as()
     if target_node.state != root.EMPTY:
         result = False
         print(f"cannot fly to {target} because it is not empty:{target_node.center}")
-    if result and root.cross_lca(current, target):
-        result = False
-        print(f"cannot fly to {target} because cross")
-    real_target = [current[i] + direction[i] * real_velocity for i in range(3)]
+    real_target = [current[i] + direction[i] * real_vel for i in range(3)]
     real_target_node = root.query(real_target, True)
     if result and real_target_node.state != root.EMPTY:
         result = False
         print(f"cannot fly to {target} by {real_target_node.center}")
-    # print(f"moving to {real_target} distance: {distance}")
-    if abs(yaw_offset) > 20:
-        real_velocity = 0
+    if result and root.cross_lca(current, target):
+        result = False
+        print(f"cannot fly to {target} because cross")
     if not result:
-        real_velocity = -real_velocity / 2
-
-    f: Future = ac.moveByVelocityAsync(  # z x -y
-        direction[2] * real_velocity,
-        direction[0] * real_velocity,
-        -direction[1] * real_velocity,
-        dt,
-        drivetrain=airsim.DrivetrainType.MaxDegreeOfFreedom,
-        yaw_mode=airsim.YawMode(True, yaw_offset),
+        real_vel = -real_vel / 4
+    elif abs(yaw_offset) > 10:
+        real_vel = real_vel / 10
+    direction *= real_vel
+    run(
+        d.move_by_velocity(
+            float(direction[0]),
+            float(direction[1]),
+            float(direction[2]),
+            dt,
+            True,
+            yaw_ratio=0.75,
+        )
     )
     if not result:
         print("updating...")
-        start = time.perf_counter() * 1000
+        start = perf_counter() * 1000
         pg.update(root)
-        print(f"update cost {time.perf_counter()*1000-start:.2f}ms")
-        f.join()
+        print(f"update cost {perf_counter()*1000-start:.2f}ms")
         return False, False
-    # pg.update(root)
-    f.join()
-    return (
-        result,
-        fusion_detection.getV3Distance(dr.getAttitude(1).getPosition(), target)
-        < accept_distance,
-    )
+    return (result, norm(position - target_arr) < accept_distance)
 
 
 def main():
-    init_ctree(debug=False)
-    ac = airsim.MultirotorClient()
-    time.sleep(1)
-    ac.confirmConnection()
-    time.sleep(1)
-    ac.reset()
-    time.sleep(1)
-    ac.enableApiControl(True)
-    time.sleep(1)
-    ac.takeoffAsync().join()
-    ac.moveToZAsync(-10, velocity=5).join()
-    dr = drone_request.DroneRequestClient()
-    # x = 500
-    # y = 100
-    # z = 500
-    x = 100
-    y = 12
-    z = 100
+    if tn_cls == CTreeNode:
+        init_ctree(debug=False)
+    d = ProjectAirSimDrone()
+    run(d.move_by_velocity(0, 0, -5, 2))
+    vis = True
+    x = 300
+    y = 300
+    z = 15
     ml = [2, 2, 2]
 
     pg = pg_cls()
     if os.path.exists("TreeNode.json.gz"):
         tn = tn_cls.load("TreeNode.json.gz")
     else:
-        tn = tn_cls().as_root([-x, 1, -z], [x, y, z], ml)
-    # target = (-297, 12.65, 246.5)
-
-    target = (71, 12, 83)
-    start_time = time.perf_counter()
+        tn = tn_cls().as_root([-x, -y, -z], [x, y, 0], ml)
+    if vis:
+        vw = VisWindow3()
+    target = [84, 69, -12]
+    # target = [169,20,-4]
+    start_time = perf_counter()
     print("first updating...")
     pg.update(tn)
-    print(f"first update cost {(time.perf_counter()-start_time)*1000:.2f}ms")
-    start_point = position = dr.getAttitude(1).getPosition()
+    print(f"first update cost {(perf_counter()-start_time)*1000:.2f}ms")
+    start_point = position = [float(p) for p in d.get_ground_truth_pose()[0]]
     path = get_path(tn, pg, position, target)
+    # vw.update(tn, pg, path=path)
     current_index = 1
-    while True:
-        result, reach = fly_to(ac, dr, tn, path[current_index], pg)
-        if not result:
-            # if target != path[current_index]:
-            #     root.add(path[current_index])
-            position = dr.getAttitude(1).getPosition()
-            path = get_path(tn, pg, position, target)
-            if len(path) <= 2:
-                pass
-                # fusion_detection.renderPointCloud(
-                #     all_points + all_paths, all_colors + all_path_colors
-                # )
-                # root.render3(with_coordinate=False, show_now=0)
-            current_index = 1
-            continue
-        if reach:
-            # print(f"reached {current_index}")
-            current_index += 1
-            if current_index >= len(path):
-                print("reach")
+    try:
+        input("press enter to avoid waitiing vw loading")
+        while True:
+            result, reach = fly_to(d, tn, pg, path[current_index])
+            if result and not full_path_cross_check(tn, path):
+                result = False
                 pg.update(tn)
-                tn.save("TreeNode.json.gz")
-                tn.save(
-                    f'{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json.gz'
-                )
-                fusion_detection.renderPointCloud(
-                    all_points + all_paths, all_colors + all_path_colors
-                )
-                p = pg.get_path(tn.query(start_point), tn.query(target))
-                cp = tn.interpolation_center(p)
-                _, sp = tn.path_smoothing(cp, [ml / 3 for ml in tn.min_length])
-                tn.render3(with_path=sp, with_coordinate=False, show_now=0)
-                break
+                print("cannot fly by path because cross")
+            if vis:
+                vw.update(tn, pg, path=path)
+            if not result:
+                # if target != path[current_index]:
+                #     root.add(path[current_index])
+                position = [float(p) for p in d.get_ground_truth_pose()[0]]
+                path = get_path(tn, pg, position, target)
+                if vis:
+                    vw.update(tn, pg, path=path)
+                if len(path) <= 2:
+                    pass
+                current_index = 1
+                continue
+            if reach:
+                current_index += 1
+                if current_index >= len(path):
+                    print("reach")
+                    pg.update(tn)
+                    tn.save("TreeNode.json.gz")
+                    tn.save(
+                        f'{datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")}.json.gz'
+                    )
+                    p = get_path(tn, pg, start_point, target)
+                    if vis:
+                        vw.update(tn, pg, path=p)
+                    input("press enter to exit")
+                    # vw.stop()
+                    d.client.disconnect()
+                    break
+    except Exception as e:
+        d.client.disconnect()
+        raise e
+    except KeyboardInterrupt as e:
+        d.client.disconnect()
+        raise e
 
 
 if __name__ == "__main__":

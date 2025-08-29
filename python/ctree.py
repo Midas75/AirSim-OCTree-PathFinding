@@ -5,14 +5,15 @@
 from __future__ import annotations
 
 import os
-from typing import Union, Iterator, Literal, Any
+from typing import Iterator, Literal, Any
 from time import perf_counter, sleep
 from math import sin, cos, pi
+from functools import cached_property
 import gc
 import json
 import gzip
 
-from numpy import ones, ndarray, uint8
+from numpy import ones, ndarray, uint8, array
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
 from cppyy import cppdef, include, gbl, addressof, set_debug
 from open3d import geometry, utility, visualization
@@ -24,7 +25,6 @@ try:
 except ModuleNotFoundError as e:
     print(f"[{e}] Import test related modules failed!")
 C_TREE_DIM = 3
-CACHE_C_TREE_PROPS = True
 _F_STD_ARRAY = None
 _I_STD_ARRAY = None
 _TREENODE_STD_VECTOR = None
@@ -36,31 +36,24 @@ _TREENODE_DATA_STD_VECTOR = None
 
 def init_ctree(
     c_tree_dim: int = 3,
-    cache_c_tree_props: bool = True,
-    warm_up: bool = True,
     debug: bool = False,
 ):
     start = perf_counter()
-    global C_TREE_DIM, CACHE_C_TREE_PROPS  # pylint: disable=global-statement
+    global C_TREE_DIM  # pylint: disable=global-statement
     global _F_STD_ARRAY, _I_STD_ARRAY, _TREENODE_STD_VECTOR, _FARRAY_STD_VECTOR, _LL_STD_PAIR  # pylint: disable=global-statement
     global _TREENODE_DATA_STD_VECTOR  # pylint: disable=global-statement
     C_TREE_DIM = c_tree_dim
-    CACHE_C_TREE_PROPS = cache_c_tree_props
     if debug:
         set_debug()
     cppdef(f"#define TREE_DIM {C_TREE_DIM}")
     include(f"{os.path.dirname(__file__)}/../cpp/ctree.hpp")
-    _F_STD_ARRAY = gbl.std.array["float", C_TREE_DIM]
-    _I_STD_ARRAY = gbl.std.array["int", C_TREE_DIM]
-    _TREENODE_STD_VECTOR = gbl.std.vector[gbl.ctree.TreeNode.Ptr]
-    _FARRAY_STD_VECTOR = gbl.std.vector[_F_STD_ARRAY]
-    _LL_STD_PAIR = gbl.std.pair["std::uint32_t", "std::uint32_t"]
-    _TREENODE_DATA_STD_VECTOR = gbl.std.vector[gbl.ctree.TreeNodeData]
+    _F_STD_ARRAY = gbl.ctree.F_STD_ARRAY
+    _I_STD_ARRAY = gbl.ctree.I_STD_ARRAY
+    _TREENODE_STD_VECTOR = gbl.ctree.TREENODE_STD_VECTOR
+    _FARRAY_STD_VECTOR = gbl.ctree.FARRAY_STD_VECTOR
+    _LL_STD_PAIR = gbl.ctree.LL_STD_PAIR
+    _TREENODE_DATA_STD_VECTOR = gbl.ctree.TREENODE_DATA_STD_VECTOR
     print(f"init cost {1000*(perf_counter()-start)} ms")
-    if warm_up:
-        start = perf_counter()
-        CTreeNode.warm_up()
-        print(f"warmup cost {1000*(perf_counter()-start)} ms")
 
 
 def farray(l: list[float]) -> object:
@@ -85,13 +78,42 @@ def llpair(ll: tuple[int, int]) -> object:
     return _LL_STD_PAIR(*ll)
 
 
+class CTreeNodeNodesWrapper:
+    holder: CTreeNode
+
+    def __init__(self, holder: CTreeNode):
+        self.holder = holder
+
+    def __getitem__(self, key: int) -> CTreeNode | None:
+        if self.holder._c.nodes.count(key) > 0:
+            return CTreeNode(self.holder._c.nodes.at(key))
+        return None
+
+    def __contains__(self, key: int) -> bool:
+        return self.holder._c.nodes.count(key) > 0
+
+    def __iter__(self) -> Iterator[int]:
+        result = []
+        for kv in self.holder._c.nodes:
+            result.append(kv.first)
+        return iter(result)
+
+    def items(self) -> Iterator[tuple[int, CTreeNode]]:
+        result = []
+        for kv in self.holder._c.nodes:
+            sp = kv.second.lock()
+            if sp:
+                result.append((kv.first, CTreeNode(sp)))
+        return iter(result)
+
+
 class CTreeNodeChildWrapper:
     holder: CTreeNode
 
     def __init__(self, holder: CTreeNode):
         self.holder = holder
 
-    def __getitem__(self, i: int) -> Union[CTreeNode, None]:
+    def __getitem__(self, i: int) -> CTreeNode | None:
         c = self.holder._c.child[i]
         if addressof(c) != 0:
             return CTreeNode(c)
@@ -108,7 +130,7 @@ class CTreeNodeChildWrapper:
         return iter(result)
 
 
-class CPathEdgeWrapper:
+class CPathGraphEdgesWrapper:
     holder: CPathGraph
 
     def __init__(self, holder: CPathGraph):
@@ -119,79 +141,144 @@ class CPathEdgeWrapper:
         it = self.holder._c.edges.begin()
         end = self.holder._c.edges.end()
         while it != end:
-            result.append(CPathEdge(it.__deref__().second))
+            result.append(CPathEdge(it.__deref__().first))
+            it.__preinc__()
+        return iter(result)
+
+    def items(self) -> Iterator[tuple[int, CPathEdge]]:
+        result = []
+        it = self.holder._c.edges.begin()
+        end = self.holder._c.edges.end()
+        while it != end:
+            deref_it = it.__deref__()
+            result.append((deref_it.first, CPathEdge(deref_it.second)))
             it.__preinc__()
         return iter(result)
 
 
 class CTreeNode:
     _c: object
-    _i_bound_max: list[int] = None
-    _i_bound_min: list[int] = None
-    _i_bound_size: list[int] = None
-    _i_center: list[int] = None
-    _bound_max: list[float] = None
-    _bound_min: list[float] = None
-    _bound_size: list[float] = None
-    _center: list[float] = None
-    _min_length: list[float] = None
-    _dims: int = None
     _ctncw: CTreeNodeChildWrapper = None
-    _id: int = None
+    _ctnnw: CTreeNodeNodesWrapper = None
 
-    @staticmethod
-    def warm_up():
-        tn = __class__()
-        tn.as_root([0] * C_TREE_DIM, [100] * C_TREE_DIM, [1] * C_TREE_DIM)
-        _ = (tn.EMPTY, tn.FULL, tn.HALF_FULL)
-        tn.clear_as(tn.EMPTY)
-        tn.divide()
-        tn.add([50] * C_TREE_DIM)
-        tn.add_i([0] * C_TREE_DIM)
-        tn.add_raycast([0] * C_TREE_DIM, [100] * C_TREE_DIM)
-        tn.deserialize(tn.serialize())
-        _ = (
-            tn.bound_max,
-            tn.bound_min,
-            tn.bound_size,
-            tn.center,
-            tn.i_bound_max,
-            tn.i_bound_min,
-            tn.i_bound_size,
-            tn.i_center,
-            tn.is_leaf,
-        )
-        for _ in tn.child:
-            pass
-        _ = tn.dims
-        tn.cross_lca([0] * C_TREE_DIM, [1] * C_TREE_DIM)
+    @cached_property
+    def nodes(self) -> CTreeNodeNodesWrapper:
+        return self._ctnnw
+
+    @cached_property
+    def i_center(self) -> list[int]:
+        return list(self._c.i_center)[: self.dims]
+
+    @cached_property
+    def i_bound_size(self) -> list[int]:
+        return list(self._c.i_bound_size)[: self.dims]
+
+    @cached_property
+    def i_bound_max(self) -> list[int]:
+        return list(self._c.i_bound_max)[: self.dims]
+
+    @cached_property
+    def i_bound_min(self) -> list[int]:
+        return list(self._c.i_bound_min)[: self.dims]
+
+    @cached_property
+    def center(self) -> list[float]:
+        return list(self._c.center)[: self.dims]
+
+    @cached_property
+    def bound_size(self) -> list[float]:
+        return list(self._c.bound_size)[: self.dims]
+
+    @cached_property
+    def bound_max(self) -> list[float]:
+        return list(self._c.bound_max)[: self.dims]
+
+    @cached_property
+    def bound_min(self) -> list[float]:
+        return list(self._c.bound_min)[: self.dims]
+
+    @cached_property
+    def min_length(self) -> list[float]:
+        return list(self._c.min_length)[: self.dims]
+
+    @cached_property
+    def dims(self) -> int:
+        return self._c.dims
+
+    @cached_property
+    def FULL(self) -> int:  # pylint: disable=C0103
+        return gbl.ctree.TreeNode.FULL
+
+    @cached_property
+    def EMPTY(self) -> int:  # pylint: disable=C0103
+        return gbl.ctree.TreeNode.EMPTY
+
+    @cached_property
+    def HALF_FULL(self) -> int:  # pylint: disable=C0103
+        return gbl.ctree.TreeNode.HALF_FULL
+
+    @cached_property
+    def state(self) -> int:
+        return self._c.state
+
+    @cached_property
+    def known(self) -> bool:
+        return self._c.known
+
+    @cached_property
+    def is_leaf(self) -> bool:
+        return self._c.is_leaf
+
+    @cached_property
+    def parent(self) -> CTreeNode | None:
+        if addressof(self._c.parent) == 0:
+            return None
+        return CTreeNode(self._c.parent)
+
+    @property
+    def child(self) -> None | CTreeNodeChildWrapper:
+        if self._c.no_child:
+            return None
+        return self._ctncw
+
+    @property
+    def last_ray_id(self) -> int:
+        return self._c.last_ray_id
+
+    @property
+    def ray_id(self) -> int:
+        return self._c.root.ray_id
+
+    @cached_property
+    def id(self) -> int:
+        return self._c.id
 
     def __init__(self, _c: object = None):
-        if _c is None:
+        if _c is None or addressof(_c) == 0:
             self._c = gbl.ctree.TreeNode.create()
         else:
             self._c = _c
         self._ctncw = CTreeNodeChildWrapper(self)
+        self._ctnnw = CTreeNodeNodesWrapper(self)
 
-    def serialize(self, _result: dict[str, Any] = None) -> dict[str, Any]:
-        if _result is not None:
-            _result.clear()
-        else:
-            _result = dict[str, Any]()
+    def serialize(self, progress: bool = True) -> dict[str, Any]:
+        if self.parent is not None:
+            raise TypeError("cannot serialize from a non-root node")
+        result = dict[str, Any]()
         td = gbl.ctree.TreeData()
         tnd = _TREENODE_DATA_STD_VECTOR()
         self._c.serialize(td, tnd)
         dims = td.dims
-        _result["min_length"] = [0] * dims
-        _result["bound_min"] = [0] * dims
-        _result["bound_max"] = [0] * dims
+        result["min_length"] = [0] * dims
+        result["bound_min"] = [0] * dims
+        result["bound_max"] = [0] * dims
         for dim in range(dims):
-            _result["min_length"][dim] = td.min_length[dim]
-            _result["bound_min"][dim] = td.bound_min[dim]
-            _result["bound_max"][dim] = td.bound_max[dim]
-        _result["nodes"] = dict[str, Any]()
+            result["min_length"][dim] = td.min_length[dim]
+            result["bound_min"][dim] = td.bound_min[dim]
+            result["bound_max"][dim] = td.bound_max[dim]
+        result["nodes"] = dict[str, Any]()
         tndl = list(tnd)
-        for item in tndl:
+        for item in tndl if not progress else tqdm.tqdm(tndl):
             info = dict[str, Any]()
             info["i_bound_min"] = [0] * dims
             info["i_bound_max"] = [0] * dims
@@ -206,8 +293,8 @@ class CTreeNode:
                 if item.child[i] == 0:
                     continue
                 info["child"][str(i)] = item.child[i]
-            _result["nodes"][str(item.id)] = info
-        return _result
+            result["nodes"][str(item.id)] = info
+        return result
 
     def save(self, path: str = None) -> None:
         if path is None:
@@ -261,8 +348,18 @@ class CTreeNode:
     def divide(self, depth: int = 1) -> None:
         return self._c.divide(depth)
 
-    def query(self, point: list[float], nearest_on_oor: bool = False) -> CTreeNode:
+    def query(
+        self, point: list[float], nearest_on_oor: bool = False
+    ) -> CTreeNode | None:
         result = self._c.query(farray(point), nearest_on_oor)
+        if addressof(result) == 0:
+            return None
+        return CTreeNode(result)
+
+    def query_i(
+        self, point: list[int], nearest_on_oor: bool = False
+    ) -> CTreeNode | None:
+        result = self._c.query(iarray(point), nearest_on_oor)
         if addressof(result) == 0:
             return None
         return CTreeNode(result)
@@ -283,130 +380,39 @@ class CTreeNode:
     def add_i(self, point: list[int], empty: bool = False) -> bool:
         return self._c.add_i(iarray(point), empty)
 
+    def next_ray_batch(self) -> None:
+        self._c.next_ray_batch()
+
+    def center_to_segment(self, start: list[float], point: list[float]) -> float:
+        return float(self._c.center_to_segment(farray(start), farray(point)))
+
     def add_raycast(
         self,
         start: list[float],
         point: list[float],
         empty_end: bool = False,
-        dynamic_culling: int = 20,
-        culling_min_ratio: float = 0.2,
-        culling_max_ratio: float = 0.8,
+        dynamic_culling: int = 10,
+        center_limit: float = 0.5,
     ) -> None:
-        return self._c.add_raycast(
-            farray(start),
-            farray(point),
-            empty_end,
-            dynamic_culling,
-            culling_min_ratio,
-            culling_max_ratio,
+        self._c.add_raycast(
+            farray(start), farray(point), empty_end, dynamic_culling, center_limit
         )
 
     def path_smoothing(
-        self, path: list[list[float]], expand: list[float] = None
+        self,
+        path: list[list[float]],
+        expand: list[float] = None,
+        break_length: float = 1,
     ) -> tuple[bool, list[list[float]]]:
         fsv = _FARRAY_STD_VECTOR([farray(item) for item in path])
         o_path = _FARRAY_STD_VECTOR()
         if expand is None:
-            changed = self._c.path_smoothing(fsv, o_path)
+            changed = self._c.path_smoothing(
+                fsv, o_path, farray([0, 0, 0]), break_length
+            )
         else:
-            changed = self._c.path_smoothing(fsv, o_path, farray(expand))
+            changed = self._c.path_smoothing(fsv, o_path, farray(expand), break_length)
         return changed, [list(o) for o in o_path]
-
-    @property
-    def i_center(self) -> list[int]:
-        if (not CACHE_C_TREE_PROPS) or (self._i_center is None):
-            self._i_center = list(self._c.i_center)
-        return self._i_center[: self.dims]
-
-    @property
-    def i_bound_size(self) -> list[int]:
-        if (not CACHE_C_TREE_PROPS) or (self._i_bound_size is None):
-            self._i_bound_size = list(self._c.i_bound_size)
-        return self._i_bound_size[: self.dims]
-
-    @property
-    def i_bound_max(self) -> list[int]:
-        if (not CACHE_C_TREE_PROPS) or (self._i_bound_max is None):
-            self._i_bound_max = list(self._c.i_bound_max)
-        return self._i_bound_max[: self.dims]
-
-    @property
-    def i_bound_min(self) -> list[int]:
-        if (not CACHE_C_TREE_PROPS) or (self._i_bound_min is None):
-            self._i_bound_min = list(self._c.i_bound_min)
-        return self._i_bound_min[: self.dims]
-
-    @property
-    def center(self) -> list[float]:
-        if (not CACHE_C_TREE_PROPS) or (self._center is None):
-            self._center = list(self._c.center)
-        return self._center[: self.dims]
-
-    @property
-    def bound_size(self) -> list[float]:
-        if (not CACHE_C_TREE_PROPS) or (self._bound_size is None):
-            self._bound_size = list(self._c.bound_size)
-        return self._bound_size[: self.dims]
-
-    @property
-    def bound_max(self) -> list[float]:
-        if (not CACHE_C_TREE_PROPS) or (self._bound_max is None):
-            self._bound_max = list(self._c.bound_max)
-        return self._bound_max[: self.dims]
-
-    @property
-    def bound_min(self) -> list[float]:
-        if (not CACHE_C_TREE_PROPS) or (self._bound_min is None):
-            self._bound_min = list(self._c.bound_min)
-        return self._bound_min[: self.dims]
-
-    @property
-    def min_length(self) -> list[float]:
-        if (not CACHE_C_TREE_PROPS) or (self._min_length is None):
-            self._min_length = list(self._c.min_length)
-        return self._min_length[: self.dims]
-
-    @property
-    def dims(self) -> int:
-        if (not CACHE_C_TREE_PROPS) or (self._dims is None):
-            self._dims = self._c.dims
-        return self._dims
-
-    @property
-    def FULL(self) -> int:  # pylint: disable=C0103
-        return gbl.ctree.TreeNode.FULL
-
-    @property
-    def EMPTY(self) -> int:  # pylint: disable=C0103
-        return gbl.ctree.TreeNode.EMPTY
-
-    @property
-    def HALF_FULL(self) -> int:  # pylint: disable=C0103
-        return gbl.ctree.TreeNode.HALF_FULL
-
-    @property
-    def state(self) -> int:
-        return self._c.state
-
-    @property
-    def known(self) -> bool:
-        return self._c.known
-
-    @property
-    def is_leaf(self) -> bool:
-        return self._c.is_leaf
-
-    @property
-    def child(self) -> Union[None, CTreeNodeChildWrapper]:
-        if self._c.no_child:
-            return None
-        return self._ctncw
-
-    @property
-    def id(self) -> int:
-        if (not CACHE_C_TREE_PROPS) or (self._id is None):
-            self._id = self._c.id
-        return self._id
 
     def interpolation_center(self, path: list[CTreeNode]) -> list[list[float]]:
         if len(path) < 1:
@@ -459,7 +465,7 @@ class CTreeNode:
 
         if is_root:
             if with_graph is not None:
-                for edge in with_graph.edges:
+                for edge_id, edge in with_graph.edges.items():
                     ca = edge.a.tree_node.i_center
                     cb = edge.b.tree_node.i_center
                     pa = (
@@ -489,51 +495,6 @@ class CTreeNode:
             waitKey(show_now)
         return image
 
-    def render3(
-        self,
-        show_now: int = -1,
-        geometries: list[geometry.Geometry] = None,
-        with_path: list[list[float]] = None,
-        with_coordinate: bool = True,
-    ) -> list[geometry.Geometry]:
-        is_root = False
-        if geometries is None:
-            is_root = True
-            geometries = list[geometry.Geometry]()
-        if self.state == self.FULL:
-            geometries.append(
-                geometry.TriangleMesh.create_box(
-                    self.bound_size[0], self.bound_size[1], self.bound_size[2]
-                ).translate(self.bound_min)
-            )
-        elif self.state == self.HALF_FULL and self.child is not None:
-            for direction in self.child:
-                self.child[direction].render3(geometries=geometries)
-        if is_root:
-            merge_mesh = geometry.TriangleMesh()
-            for tm in geometries:
-                merge_mesh += tm
-            merge_mesh.remove_duplicated_triangles()
-            merge_mesh.compute_vertex_normals()
-            geometries = [merge_mesh]
-            if with_coordinate:
-                geometries.append(
-                    geometry.TriangleMesh.create_coordinate_frame(
-                        size=max(*self.bound_size)
-                    )
-                )
-            if with_path is not None and len(with_path) > 1:
-                connection = [[i, i + 1] for i in range(len(with_path) - 1)]
-                ls = geometry.LineSet(
-                    utility.Vector3dVector(with_path),
-                    utility.Vector2iVector(connection),
-                )
-                ls.paint_uniform_color((1, 0, 0))
-                geometries.append(ls)
-        if show_now >= 0:
-            visualization.draw_geometries(geometries)  # pylint: disable=no-member
-        return geometries
-
 
 class CPathNode:
     _c: object
@@ -554,24 +515,24 @@ class CPathEdge:
         self._c = _c
 
     @property
-    def a(self) -> CPathEdge:
+    def a(self) -> CPathNode:
         return CPathNode(self._c.a)
 
     @property
-    def b(self) -> CPathEdge:
+    def b(self) -> CPathNode:
         return CPathNode(self._c.b)
 
 
 class CPathGraph:
     _c: object
-    _cpew: CPathEdgeWrapper
+    _cpgew: CPathGraphEdgesWrapper
 
     def __init__(self, _c: object = None) -> None:
         if _c is None:
             self._c = gbl.ctree.PathGraph()
         else:
             self._c = _c
-        self._cpew = CPathEdgeWrapper(self)
+        self._cpgew = CPathGraphEdgesWrapper(self)
 
     def update(self, root: CTreeNode, full_reset: bool = False) -> None:
         return self._c.update(root._c, full_reset)  # pylint: disable=protected-access
@@ -591,8 +552,8 @@ class CPathGraph:
         return []
 
     @property
-    def edges(self) -> CPathEdgeWrapper:
-        return self._cpew
+    def edges(self) -> CPathGraphEdgesWrapper:
+        return self._cpgew
 
 
 class CTreeNodeTest:

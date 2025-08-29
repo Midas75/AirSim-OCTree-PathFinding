@@ -4,12 +4,20 @@ import time
 import random
 from cv2 import imshow, waitKey, line  # pylint: disable=no-name-in-module
 from tree import TreeNode, PathNode, PathGraph
-from ctree import CTreeNode, CPathGraph, init_ctree
 
-tn_cls = CTreeNode
-pg_cls = CPathGraph
-if tn_cls == CTreeNode:
+
+c = 1
+if c:
+    from ctree import CTreeNode, CPathGraph, init_ctree
+
+    tn_cls = CTreeNode
+    pg_cls = CPathGraph
     init_ctree()
+else:
+    tn_cls = TreeNode
+    pg_cls = PathGraph
+
+from tree_utils import VisWindow3
 
 
 class TreeTest:
@@ -129,8 +137,8 @@ class TreeTest:
     @staticmethod
     def get_path_test():
 
-        tn = TreeNode().as_root([0, 0], [50, 50], [0.5, 0.5])
-        pg = PathGraph()
+        tn = tn_cls().as_root([0, 0], [50, 50], [0.5, 0.5])
+        pg = pg_cls()
         for _i in range(10):
             for _j in range(100):
                 tn.add(
@@ -294,6 +302,68 @@ class TreeTest:
         imshow("lca_test", im)
         waitKey(0)
 
+    @staticmethod
+    def get_path3_test():
+        tn = tn_cls().as_root([0, 0, 0], [32, 32, 32], [1, 1, 1])
+        pg = pg_cls()
+        pg.update(tn)
+        vw3 = VisWindow3()
+        print(tn.i_bound_min, tn.i_bound_max)
+        for i in range(
+            tn.i_bound_min[0] + 10,
+            tn.i_bound_max[0] - 10 + 2,
+        ):
+            for j in range(
+                tn.i_bound_min[1] + 10,
+                tn.i_bound_max[1] - 10 + 2,
+            ):
+                for k in range(tn.i_bound_min[2] + 10, tn.i_bound_max[2] - 10 + 2):
+                    tn.add_i([i, j, k])
+                pg.update(tn, True)
+        # start, end = tn.query(tn.bound_min, True), tn.query(tn.bound_max, True)
+        # print(start, end)
+        # p = pg.get_path(start, end)
+        p = pg.get_path(tn.query(tn.bound_min, True), tn.query(tn.bound_max, True))
+        p = tn.interpolation_center(p)
+        _, p = tn.path_smoothing(p, tn.min_length)
+        vw3.update(tn, pg, p)
+        input("enter to exit")
+
+    @staticmethod
+    def update_path_test():
+        tn = tn_cls().as_root([0, 0, 0], [100, 100, 32], [1, 1, 1])
+        pg = pg_cls()
+        vw3 = VisWindow3()
+        pg.update(tn)
+
+        for i in range(tn.i_bound_min[0], tn.i_bound_max[0]):
+            for j in range(tn.i_bound_min[1], tn.i_bound_max[1]):
+                tn.add_raycast([0, 0, 0], [i, j, 1])
+                pg.update(tn)
+                tn.add_raycast([0, 0, 0], [i, j, 3])
+                tn.add_raycast([0, 0, 0], [i, j, 9])
+                pg.update(tn)
+            cost = vw3.update(tn, pg, bound=True)
+            print(f"update cost {cost*1000:.2f}ms")
+        vw3.stop()
+
+    @staticmethod
+    def cross_expand3_test():
+        tn = tn_cls().as_root([0, 0, 0], [10, 10, 5], [2, 2, 2])
+        vw3 = VisWindow3()
+        tn.add([5, 5, 3])
+        for i in range(0, 50):
+            start, end = [i / 50 * 3, 6 - i / 50 * 3, 3], [
+                i / 50 * 4,
+                8 - i / 50 * 4,
+                3,
+            ]
+            cross = tn.cross_lca(start, end, [1, 1, 1])
+            print(cross, end="")
+            vw3.update(tn, path=[start, end])
+            input()
+        input("enter to exit")
+
 
 if __name__ == "__main__":
     tt = TreeTest
@@ -306,7 +376,7 @@ if __name__ == "__main__":
     # tt.neighbor_test()
     # tt.graph_test()
     # tt.graph_update_test()
-    tt.get_path_test()
+    # tt.get_path_test()
     # tt.render3_test()
     # tt.octree_test()
     # tt.serialize_deserialize_test()
@@ -314,3 +384,6 @@ if __name__ == "__main__":
     # tt.dynamic_culling_test()
     # tt.raycast_benchmark_test()
     # tt.lca_test()
+    # tt.get_path3_test()
+    # tt.update_path_test()
+    tt.cross_expand3_test()

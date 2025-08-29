@@ -3,17 +3,18 @@
 # pylint: disable=C0116  # I'm lazy
 # pylint: disable=C0302  # I'm long
 from __future__ import annotations
-from math import sqrt, ceil, log2
+from math import sqrt, ceil, log2, dist
 from typing import Union, Literal, Any
 from itertools import product
 import heapq
 import json
 import gzip
 
-from numpy import ndarray, uint8, ones
+from numpy import ndarray, uint8, ones, array
 
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
 from open3d import geometry, utility, visualization
+from tqdm import tqdm
 
 
 class TreeNode:
@@ -24,7 +25,10 @@ class TreeNode:
 
     child: dict[int, TreeNode] = None
     state: int
+
     dynamic_culling: int = -1
+    last_ray_id: int = 0
+    ray_id: int = 0
 
     bound_min: list[float]
     bound_max: list[float]
@@ -34,6 +38,7 @@ class TreeNode:
     min_length: list[float]
     parent: TreeNode
     root: TreeNode
+    nodes: dict[int, TreeNode]
 
     bit_values: list[int] = [1, 2, 4, 8]
     dims: int
@@ -61,6 +66,7 @@ class TreeNode:
         if parent is not None:
             self.parent = parent
             self.root = parent.root
+            self.nodes = parent.nodes
 
             self.dims = parent.dims
             self.rangel = parent.rangel
@@ -85,30 +91,34 @@ class TreeNode:
                         self.i_bound_max[dim] = parent.i_bound_max[dim]
                 self.update_bound()
 
-    def serialize(self, _result: dict[str, Any] = None) -> dict[str, Any]:
-        if _result is None:
-            _result = dict[str, Any]()
-            _result["min_length"] = self.min_length
-            _result["bound_min"] = self.bound_min
-            _result["bound_max"] = self.bound_max
-            _result["nodes"] = dict[str, Any]()
-        s_id = str(self.id)
-        info = dict[str, Any]()
-        info["i_bound_min"] = self.i_bound_min
-        info["i_bound_max"] = self.i_bound_max
-        info["known"] = self.known
-        info["state"] = self.state
-        info["is_leaf"] = self.is_leaf
-        if self.child is not None:
-            info["child"] = dict[str, Any]()
-            for direction in self.child:
-                c = self.child[direction]
-                info["child"][str(direction)] = c.id
-                c.serialize(_result)
-        _result["nodes"][s_id] = info
-        return _result
+    def serialize(self, progress: bool = True) -> dict[str, Any]:
+        if self.parent is not None:
+            raise TypeError("cannot serialize from a non-root node")
+        result = dict[str, Any]()
+        result["min_length"] = self.min_length
+        result["bound_min"] = self.bound_min
+        result["bound_max"] = self.bound_max
+        result["nodes"] = dict[str, Any]()
+        for i_id, node in (
+            tqdm(self.nodes.items(), desc="serializing")
+            if progress
+            else self.nodes.items()
+        ):
+            s_id = str(i_id)
+            info = dict[str, Any]()
+            info["i_bound_min"] = node.i_bound_min
+            info["i_bound_max"] = node.i_bound_max
+            info["known"] = node.known
+            info["state"] = node.state
+            info["is_leaf"] = node.is_leaf
+            if node.child is not None:
+                info["child"] = dict[str, Any]()
+                for direction, c in node.child.items():
+                    info["child"][str(direction)] = c.id
+            result["nodes"][s_id] = info
+        return result
 
-    def save(self, path: str = None):
+    def save(self, path: str = None) -> None:
         if path is None:
             path = f"{self.__class__.__name__}.json.gz"
         with open(path, "wb") as f:
@@ -118,7 +128,11 @@ class TreeNode:
 
     @staticmethod
     def deserialize(
-        obj: dict[str, Any], _current_id: int = None, _parent: TreeNode = None
+        obj: dict[str, Any],
+        progress: bool = True,
+        _current_id: int = None,
+        _parent: TreeNode = None,
+        _tqdm: tqdm = None,
     ) -> TreeNode:
         is_root = False
         if _current_id is None:
@@ -127,6 +141,8 @@ class TreeNode:
             )
             _current_id = node.id
             is_root = True
+            if progress:
+                _tqdm = tqdm(total=len(obj["nodes"]), desc="deserializing")
         info = obj["nodes"][str(_current_id)]
         if not is_root:
             node = TreeNode(_parent)
@@ -138,9 +154,18 @@ class TreeNode:
         node.is_leaf = info["is_leaf"]
         if "child" in info:
             node.child = dict[int, TreeNode]()
+            relink_node = dict[int, int]()
             for str_direction, int_id in info["child"].items():
                 int_direction = int(str_direction)
-                node.child[int_direction] = TreeNode.deserialize(obj, int_id, node)
+                if int_id not in relink_node:
+                    node.child[int_direction] = TreeNode.deserialize(
+                        obj, progress, int_id, node, _tqdm
+                    )
+                    if _tqdm is not None:
+                        _tqdm.update(1)
+                    relink_node[int_id] = int_direction
+                else:
+                    node.child[int_direction] = node.child[relink_node[int_id]]
         return node
 
     @staticmethod
@@ -150,26 +175,6 @@ class TreeNode:
         with open(path, "rb") as f:
             j = gzip.decompress(f.read()).decode("utf-8")
             return TreeNode.deserialize(json.loads(j))
-
-    def path_smoothing(
-        self, path: list[list[float]], expand: list[float] = None
-    ) -> tuple[bool, list[list[float]]]:
-        changed = False
-        if len(path) <= 2:
-            return changed, path
-        result = list[list[float]]()
-        result.append(path[0])
-        i = 0
-        while i < len(path) - 1:
-            j = len(path) - 1
-            while j > i + 1:
-                if not self.cross_lca(path[i], path[j], expand):
-                    changed = True
-                    break
-                j -= 1
-            result.append(path[j])
-            i = j
-        return changed, result
 
     def as_root(
         self, bound_min: list[float], bound_max: list[float], min_length: list[float]
@@ -183,6 +188,7 @@ class TreeNode:
         ]
         self.root = self
         self.parent = None
+        self.nodes = dict[int, TreeNode]()
 
         self.bound_min = bound_min
         self.bound_max = bound_max
@@ -213,16 +219,19 @@ class TreeNode:
             self.i_center[dim] = self.i_bound_max[dim] // 2
         self._min = self.is_min()
         self.id = self.gen_id()
+        # python GC can handle this
+        self.nodes[self.id] = self
         return self
 
     def update_bound(self):
         self.center = [0] * self.dims
         self.i_center = [0] * self.dims
-        if self.parent is not None:  # is not root
-            self.bound_max = [0] * self.dims
-            self.bound_min = [0] * self.dims
-            self.bound_size = [0] * self.dims
-            self.i_bound_size = [0] * self.dims
+        if self.parent is None:  # is not root
+            raise ValueError("root cannot update bound")
+        self.bound_max = [0] * self.dims
+        self.bound_min = [0] * self.dims
+        self.bound_size = [0] * self.dims
+        self.i_bound_size = [0] * self.dims
         for dim in self.rangel:
             self.i_bound_size[dim] = self.i_bound_max[dim] - self.i_bound_min[dim]
             if self.parent is not None:
@@ -238,7 +247,10 @@ class TreeNode:
             self.i_center[dim] = (self.i_bound_max[dim] + self.i_bound_min[dim]) // 2
 
         self._min = self.is_min()
+        if self.id in self.nodes:
+            del self.nodes[self.id]
         self.id = self.gen_id()
+        self.nodes[self.id] = self
 
     def gen_id(self) -> int:
         result = 0
@@ -293,8 +305,7 @@ class TreeNode:
                 empty_counter += 1
         if empty_counter == 0 and half_full_counter == 0:
             self.state = self.FULL
-            self.is_leaf = True
-            self.child.clear()
+            self.remove_child()
         elif full_counter == 0 and half_full_counter == 0:
             self.state = self.EMPTY
         else:
@@ -346,7 +357,7 @@ class TreeNode:
 
     def query(
         self, point: list[float], nearest_on_oor: bool = False
-    ) -> Union[TreeNode, None]:
+    ) -> TreeNode | None:
         if (not nearest_on_oor) and self.out_of_region(point):
             return None
         if self.is_leaf:
@@ -368,16 +379,24 @@ class TreeNode:
             return self.child[direction].query_i(point, True)
         return self
 
-    def clear_as(self, state: Literal[0, 1, 2] = EMPTY) -> None:
-        if self.child is not None:
-            self.child = None
+    def clear_as(self, state: Literal[0, 1, 2] = 0) -> None:
+        self.remove_child()
         self.state = state
         self.known = False
-        self.is_leaf = True
         parent = self.parent
         while parent is not None:
             parent.update_state()
             parent = parent.parent
+
+    def remove_child(self):
+        if self.child is None:
+            return
+        for _, child in self.child.items():
+            child.remove_child()
+            if child.id in self.nodes:
+                del self.nodes[child.id]
+        self.child = None
+        self.is_leaf = True
 
     def lca(self, node1: TreeNode, node2: TreeNode) -> TreeNode:
         p1 = node1
@@ -439,8 +458,17 @@ class TreeNode:
     ) -> bool:
         if expand is None:
             expand = [0] * self.dims
-        n1 = self.query(start, True)
-        n2 = self.query(end, True)
+        ex_start = start.copy()
+        ex_end = end.copy()
+        for i in self.rangel:
+            if start[i] < end[i]:
+                ex_start[i] -= expand[i]
+                ex_end[i] += expand[i]
+            else:
+                ex_start[i] += expand[i]
+                ex_end[i] -= expand[i]
+        n1 = self.query(ex_start, True)
+        n2 = self.query(ex_end, True)
         vector = [end[i] - start[i] for i in self.rangel]
         inv_vector = [(None if vector[i] == 0 else 1 / vector[i]) for i in self.rangel]
         return self.lca(n1, n2).cross(start, inv_vector, expand)
@@ -557,14 +585,27 @@ class TreeNode:
         exit_t = t_max
         return out_dim, [point[dim] + exit_t * vector[dim] for dim in self.rangel]
 
+    def next_ray_batch(self) -> None:
+        self.root.ray_id += 1
+
+    def center_to_segment(self, start: list[float], point: list[float]) -> float:
+        ab = [point[i] - start[i] for i in self.rangel]
+        ap = [self.center[i] - start[i] for i in self.rangel]
+        ab2 = sum(a * a for a in ab)
+        if ab2 == 0:
+            return dist(self.center, start)
+        t = sum(ap[i] * ab[i] for i in self.rangel) / ab2
+        t = max(0, min(1, t))
+        q = [start[i] + t * ab[i] for i in self.rangel]
+        return dist(self.center, q)
+
     def add_raycast(
         self,
         start: list[float],
         point: list[float],
         empty_end: bool = False,
-        dynamic_culling: int = 20,  # set to negative to disable
-        culling_min_ratio: float = 0.2,
-        culling_max_ratio: float = 0.8,
+        dynamic_culling: int = 10,  # set to negative to disable
+        center_limit: float = 0.5,
     ) -> None:
         self.add(point, empty_end)
         end = self.query(point)
@@ -580,25 +621,23 @@ class TreeNode:
         visit = set[int]()
         while True:
             cnode = self.query(current)
-            if (
-                cnode is None
-                # or cnode.state != cnode.EMPTY
-                or cnode is end
-                or cnode.id in visit
-            ):
+            if cnode is None or cnode is end or cnode.id in visit:
                 break
-            need_culling: bool = False
             for dim in self.rangel:
                 cd = abs(current[dim] - start[dim])
                 ad = abs(direction[dim])
                 if cd > ad:
                     q = True
                     break
-                if cd > culling_min_ratio * ad and cd < culling_max_ratio * ad:
-                    need_culling = True
             if q:
                 break
-            if cnode.state != cnode.EMPTY and need_culling and dynamic_culling > 0:
+            if (
+                cnode.state == cnode.FULL
+                and dynamic_culling > 0
+                and cnode.last_ray_id != cnode.root.ray_id
+                and cnode.center_to_segment(start, point) <= center_limit
+            ):
+                cnode.last_ray_id = cnode.root.ray_id
                 if cnode.dynamic_culling < 0:
                     cnode.dynamic_culling = dynamic_culling
                 else:
@@ -611,6 +650,46 @@ class TreeNode:
             out_dim, current = cnode.ray_out_intersect(start, direction)
 
             current[out_dim] += self.min_length[out_dim] * sign[out_dim]
+
+    def path_smoothing(
+        self,
+        path: list[list[float]],
+        expand: list[float] = None,
+        break_length: float = 1,
+    ) -> tuple[bool, list[list[float]]]:
+        changed = False
+        if len(path) <= 1:
+            return changed, path
+        if break_length > 0:
+            broke_path = []
+            broke_path.append(path[0])
+            for i in range(len(path) - 1):
+                p1 = path[i]
+                p2 = path[i + 1]
+                d = dist(p1, p2)
+                if d < break_length:
+                    broke_path.append(p2)
+                else:
+                    n = ceil(d / break_length)
+                    for j in range(1, n + 1):
+                        t = j / n
+                        new_point = [p1[k] + (p2[k] - p1[k]) * t for k in self.rangel]
+                        broke_path.append(new_point)
+            path = broke_path
+        result = list[list[float]]()
+        result.append(path[0])
+        i = 0
+        while i < len(path) - 1:
+            j = i + 2
+            while j <= len(path) - 1:
+                cl = self.cross_lca(path[i], path[j], expand)
+                if cl:
+                    changed = True
+                    break
+                j += 1
+            result.append(path[j - 1])
+            i = j - 1
+        return changed, result
 
     def get_neighbor(self) -> set[TreeNode]:
         result = set[TreeNode]()
@@ -634,12 +713,16 @@ class TreeNode:
 
     def contact_with(self, other: TreeNode) -> list[bool]:
         result = [False] * (self.dims + 1)
+        true_counter = 0
         for dim in self.rangel:
             size = (self.i_bound_size[dim] + other.i_bound_size[dim]) // 2
             c2c = abs(self.i_center[dim] - other.i_center[dim])
             if size < c2c:
                 return result
-            result[dim + 1] = True
+            true_counter += 1
+            if size == c2c:
+                result[dim + 1] = True
+            # size < c2c: result[dim+1]= False
         result[0] = True
         return result
 
@@ -650,15 +733,15 @@ class TreeNode:
         center = [0] * self.dims
         for dim in self.rangel:
             if cw[dim + 1]:
-                if self.i_bound_size[dim] < other.i_bound_size[dim]:
-                    center[dim] = self.center[dim]
-                else:
-                    center[dim] = other.center[dim]
-            else:
                 if self.i_center[dim] < other.i_center[dim]:
                     center[dim] = self.center[dim] + self.bound_size[dim] / 2
                 else:
                     center[dim] = self.center[dim] - self.bound_size[dim] / 2
+            else:
+                if self.i_bound_size[dim] < other.i_bound_size[dim]:
+                    center[dim] = self.center[dim]
+                else:
+                    center[dim] = other.center[dim]
         return center
 
     def interpolation_center(self, path: list[TreeNode]) -> list[list[float]]:
@@ -669,7 +752,9 @@ class TreeNode:
         for i in range(1, len(path)):
             f = path[i - 1]
             t = path[i]
-            result.append(f.contact_center(t))
+            c = f.contact_center(t)
+            if c is not None:
+                result.append(c)
             result.append(t.center)
         return result
 
@@ -745,56 +830,10 @@ class TreeNode:
             waitKey(show_now)  # pylint: disable=no-member
         return image
 
-    def render3(
-        self,
-        show_now: int = -1,
-        geometries: list[geometry.Geometry] = None,
-        with_path: list[list[float]] = None,
-        with_coordinate: bool = True,
-    ) -> list[geometry.Geometry]:
-        is_root = False
-        if geometries is None:
-            is_root = True
-            geometries = list[geometry.Geometry]()
-        if self.state == self.FULL:
-            geometries.append(
-                geometry.TriangleMesh.create_box(
-                    self.bound_size[0], self.bound_size[1], self.bound_size[2]
-                ).translate(self.bound_min)
-            )
-        elif self.state == self.HALF_FULL and self.child is not None:
-            for direction in self.child:
-                self.child[direction].render3(geometries=geometries)
-        if is_root:
-            merge_mesh = geometry.TriangleMesh()
-            for tm in geometries:
-                merge_mesh += tm
-            merge_mesh.remove_duplicated_triangles()
-            merge_mesh.compute_vertex_normals()
-            geometries = [merge_mesh]
-            if with_coordinate:
-                geometries.append(
-                    geometry.TriangleMesh.create_coordinate_frame(
-                        size=max(*self.bound_size)
-                    )
-                )
-            if with_path is not None and len(with_path) > 1:
-                conntection = [[i, i + 1] for i in range(len(with_path) - 1)]
-                ls = geometry.LineSet(
-                    utility.Vector3dVector(with_path),
-                    utility.Vector2iVector(conntection),
-                )
-                ls.paint_uniform_color((1, 0, 0))
-                geometries.append(ls)
-
-        if show_now >= 0:
-            visualization.draw_geometries(geometries)  # pylint: disable=no-member
-        return geometries
-
 
 class PathNode:
     id: int
-    edges: set[tuple[int, int]]
+    edges: set[int]
     tree_node: TreeNode
     f: float
     g: float = float("inf")
@@ -806,7 +845,7 @@ class PathNode:
         self.id = tree_node.id
         self.f = 0
         self.h = 0
-        self.edges = set[tuple[int, int]]()
+        self.edges = set[int]()
 
     def distance(self, other: PathNode, unknown_penalty: bool = True) -> float:
         up_factor = 0.2
@@ -843,22 +882,16 @@ class PathEdge:
         self.id = min(a.id, b.id), max(a.id, b.id)
         self.hash = PathEdge.pair_code_ll(self.id)
 
-    def __eq__(self, value: object):
-        return self.id == value.id
-
-    def __hash__(self) -> int:
-        return self.hash
-
 
 class PathGraph:
     nodes: dict[int, PathNode]
-    edges: dict[tuple[int, int], PathEdge]
+    edges: dict[int, PathEdge]
     last_root: TreeNode = None
     last_leaves: set[TreeNode] = None
 
     def __init__(self) -> None:
         self.nodes = dict[int, PathNode]()
-        self.edges = dict[tuple[int, int], PathEdge]()
+        self.edges = dict[int, PathEdge]()
         self.last_leaves = set[TreeNode]()
 
     def add_node(self, tree_node: TreeNode) -> int:
@@ -877,7 +910,7 @@ class PathGraph:
                     del e.b.edges[edge_id]
 
     def add_edge(self, a: TreeNode, b: TreeNode) -> None:
-        edge_id = (a.id, b.id)
+        edge_id = PathEdge.pair_code_ll((a.id, b.id))
         if edge_id not in self.edges:
             pn1 = self.nodes[self.add_node(a)]
             pn2 = self.nodes[self.add_node(b)]
@@ -885,10 +918,11 @@ class PathGraph:
             pn1.edges.add(edge_id)
             pn2.edges.add(edge_id)
 
-    def remove_edge(self, edge_id: tuple[int, int]) -> None:
+    def remove_edge(self, edge_id: int, remove_from_this: bool = False) -> None:
         if edge_id in self.edges:
             pe = self.edges[edge_id]
-            del self.edges[edge_id]
+            if remove_from_this:
+                del self.edges[edge_id]
             pe.a.edges.remove(edge_id)
             pe.b.edges.remove(edge_id)
 
@@ -928,7 +962,7 @@ class PathGraph:
                     self.add_edge(leaf, leaf2)
 
     def update_edges_neighbor(self, leaves: set[TreeNode]):
-        expire_edge_ids = set[tuple[int, int]]()
+        expire_edge_ids = set[int]()
         active_nodes = set[TreeNode]()
         for edge_id, e in self.edges.items():
             tna = e.a.tree_node
@@ -946,9 +980,9 @@ class PathGraph:
                 if not a_expire:
                     active_nodes.add(tna)
         for edge_id in expire_edge_ids:
-            self.remove_edge(edge_id)
+            self.remove_edge(edge_id, True)
         for leaf in leaves:
-            if (leaf in active_nodes) or (leaf.id not in self.last_leaves):
+            if (leaf in active_nodes) or (leaf not in self.last_leaves):
                 neighbors = leaf.get_neighbor()
                 for neighbor in neighbors:
                     if neighbor in leaves:
@@ -990,7 +1024,6 @@ class PathGraph:
             close_set.add(current)
             for eid in current.edges:
                 if eid not in self.edges:
-                    print("unexpected no key in edges")
                     continue
                 e = self.edges[eid]
                 neighbor: PathNode = e.b if e.a == current else e.a

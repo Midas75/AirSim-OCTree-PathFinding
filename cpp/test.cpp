@@ -78,8 +78,36 @@ void find_test() {
 	auto n = tn->query({ 0,0,0 });
 	pg.get_path(n, n, ov);
 }
+void dump_test() {
+	auto tn = ctree::TreeNode::create()->as_root(
+		{ 0,0,0 }, { 30,30,30 }, { 1,1,1 }, 3
+	);
+	auto pg = ctree::PathGraph();
+	for (int i = tn->i_bound_min[0]; i < tn->i_bound_max[0]; i++) {
+		for (int j = tn->i_bound_min[1]; j < tn->i_bound_max[1]; j++) {
+			tn->add_i({ i,j,tn->i_bound_min[2] });
+		}
+	}
+	for (int i = tn->i_bound_min[0] + 10; i < tn->i_bound_max[0] - 10; i++) {
+		for (int j = tn->i_bound_min[1] + 10; j < tn->i_bound_max[1] - 10; j++) {
+			for (int k = tn->i_bound_min[2]; k < tn->i_bound_max[2] - 10; k++) {
+				tn->add_i({ i,j,k });
+			}
+			pg.update(tn);
+		}
+	}
+	std::vector<ctree::TreeNode::Ptr> outpath;
+	pg.get_path(
+		tn->query({ 0,0,5 }, true),
+		tn->query({ tn->bound_max[0],tn->bound_max[1],5 }, true),
+		outpath
+	);
+	std::vector<std::array<float, 3>> ic, ps;
+	tn->interpolation_center(outpath, ic);
+	tn->path_smoothing(ic, ps);
+}
 int main()
 {
-	find_test();
+	dump_test();
 	return 0;
 }
