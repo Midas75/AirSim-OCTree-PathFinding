@@ -1,7 +1,6 @@
 import drone_request
 import math
 import typing
-import open3d as o3d
 
 
 def rotateWithQuaternion(
@@ -119,13 +118,3 @@ def getPointCloudPoints(
             else:
                 colors.append((0.5, 0.5, 0.5))
     return points, colors
-
-
-def renderPointCloud(
-    points: list[tuple[float, float, float]], colors: list[tuple[float, float, float]] = None
-) -> None:
-    pcd = o3d.geometry.PointCloud()
-    pcd.points = o3d.utility.Vector3dVector(points)
-    if colors != None:
-        pcd.colors = o3d.utility.Vector3dVector(colors)
-    o3d.visualization.draw_geometries([pcd])

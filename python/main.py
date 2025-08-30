@@ -6,7 +6,7 @@ from asyncio import run
 from numpy import array, float16, clip, arccos, degrees
 from numpy.linalg import norm
 
-from drone import ProjectAirSimDrone, IDrone
+from drone import ProjectAirSimDrone, AdvancedAirSimDrone
 from tree import PathGraph, TreeNode
 
 from ctree import CPathGraph, CTreeNode, init_ctree
@@ -122,7 +122,8 @@ def fly_to(
 def main():
     if tn_cls == CTreeNode:
         init_ctree(debug=False)
-    d = ProjectAirSimDrone()
+    # d = ProjectAirSimDrone()
+    d = AdvancedAirSimDrone()
     run(d.move_by_velocity(0, 0, -5, 2))
     vis = True
     x = 300
@@ -138,7 +139,6 @@ def main():
     if vis:
         vw = VisWindow3()
     target = [84, 69, -12]
-    # target = [169,20,-4]
     start_time = perf_counter()
     print("first updating...")
     pg.update(tn)
@@ -182,13 +182,13 @@ def main():
                         vw.update(tn, pg, path=p)
                     input("press enter to exit")
                     # vw.stop()
-                    d.client.disconnect()
+                    d.close()
                     break
     except Exception as e:
-        d.client.disconnect()
+        d.close()
         raise e
     except KeyboardInterrupt as e:
-        d.client.disconnect()
+        d.close()
         raise e
 
 

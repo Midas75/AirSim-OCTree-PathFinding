@@ -6,24 +6,15 @@ from __future__ import annotations
 
 import os
 from typing import Iterator, Literal, Any
-from time import perf_counter, sleep
-from math import sin, cos, pi
+from time import perf_counter
 from functools import cached_property
-import gc
 import json
 import gzip
-
-from numpy import ones, ndarray, uint8, array
+from tqdm import tqdm
+from numpy import ones, ndarray, uint8
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
 from cppyy import cppdef, include, gbl, addressof, set_debug
-from open3d import geometry, utility, visualization
 
-try:
-    import tqdm
-    import matplotlib.pyplot as plt
-    import psutil
-except ModuleNotFoundError as e:
-    print(f"[{e}] Import test related modules failed!")
 C_TREE_DIM = 3
 _F_STD_ARRAY = None
 _I_STD_ARRAY = None
@@ -278,7 +269,7 @@ class CTreeNode:
             result["bound_max"][dim] = td.bound_max[dim]
         result["nodes"] = dict[str, Any]()
         tndl = list(tnd)
-        for item in tndl if not progress else tqdm.tqdm(tndl):
+        for item in tndl if not progress else tqdm(tndl):
             info = dict[str, Any]()
             info["i_bound_min"] = [0] * dims
             info["i_bound_max"] = [0] * dims
@@ -465,7 +456,7 @@ class CTreeNode:
 
         if is_root:
             if with_graph is not None:
-                for edge_id, edge in with_graph.edges.items():
+                for _, edge in with_graph.edges.items():
                     ca = edge.a.tree_node.i_center
                     cb = edge.b.tree_node.i_center
                     pa = (
@@ -554,236 +545,3 @@ class CPathGraph:
     @property
     def edges(self) -> CPathGraphEdgesWrapper:
         return self._cpgew
-
-
-class CTreeNodeTest:
-    @staticmethod
-    def add_test():
-        start = perf_counter()
-        tn = CTreeNode().as_root([0, 0, 0], [50, 50, 50], [1, 1, 1])
-        print(f"as_root cost {1000*(perf_counter()-start)} ms")
-        start = perf_counter()
-        tn.add([1, 1, 1])
-        print(f"add cost {1000*(perf_counter()-start)} ms")
-        start = perf_counter()
-        print(tn.i_center, tn.i_bound_size, tn.bound_size)
-        print(f"print cost {1000*(perf_counter()-start)} ms")
-
-    @staticmethod
-    def query_test():
-        start = perf_counter()
-        tn = CTreeNode().as_root([0, 0, 0], [50, 50, 50], [1, 1, 1])
-        print(f"as_root cost {1000*(perf_counter()-start)} ms")
-        start = perf_counter()
-        tn.add([1, 1, 1])
-        print(f"add cost {1000*(perf_counter()-start)} ms")
-        start = perf_counter()
-        print(tn.query([1, 1, 1]).i_center)
-        print(f"query cost {1000*(perf_counter()-start)} ms")
-
-    @staticmethod
-    def render2_test():
-        tn = CTreeNode().as_root([0, 0], [50, 50], [2, 2])
-        tn.add([1, 1])
-        tn.add([30, 30])
-        tn.render2(show_now=0)
-
-    @staticmethod
-    def render2_benchmark_test():
-        tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
-        number = 500
-        for i in range(number):
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] * cos(pi / 2 * i / number),
-            ]
-            tn.add_raycast([0, 0], p, False)
-            start = perf_counter()
-            tn.render2(show_now=-1)
-            print(f"render2 cost {1000*(perf_counter()-start)} ms")
-
-    @staticmethod
-    def raycast_test():
-        tn = CTreeNode()
-        tn.as_root([0, 0], [640, 640], [2, 2])
-        number = 500
-        for i in range(number):
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] * cos(pi / 2 * i / number),
-            ]
-            start = perf_counter()
-            tn.add_raycast([0, 0], p, False)
-            print(f"add_raycast cost {1000*(perf_counter()-start)} ms")
-            tn.render2(show_now=0)
-
-    @staticmethod
-    def raycast_benchmark_test():
-        tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
-        number = 500
-        start = perf_counter()
-        for i in range(number):
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] * cos(pi / 2 * i / number),
-            ]
-            tn.add_raycast([0, 0], p, False)
-        print(f"add_raycast {number} times cost {1000*(perf_counter()-start)} ms")
-
-    @staticmethod
-    def memory_safety_test():
-        test_number = 10000
-        rest_check = 5000
-        rest_interval_ms = 1
-        mem_mb = [0] * (test_number + rest_check)
-        process = psutil.Process(os.getpid())
-        number = 500
-        ps = [
-            [
-                640 * sin(pi / 2 * i / number),
-                640 * cos(pi / 2 * i / number),
-            ]
-            for i in range(number)
-        ]
-        for t in tqdm.tqdm(range(test_number)):
-            tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
-            for i in range(number):
-                tn.add_raycast([0, 0], ps[i], False)
-            mem_mb[t] = process.memory_info().rss / 1024 / 1024
-        gc.collect()
-        for r in tqdm.tqdm(range(rest_check)):
-            sleep(rest_interval_ms / 1000)
-            mem_mb[test_number + r] = process.memory_info().rss / 1024 / 1024
-        plt.plot(list(range(test_number + rest_check)), mem_mb)
-        plt.xlabel("Test number")
-        plt.ylabel("Memory (MB)")
-        plt.show()
-
-    @staticmethod
-    def std_array_test():
-        test_number = 1000000
-        for _ in tqdm.tqdm(range(test_number), desc="f2"):
-            farray([0, 0])
-        for _ in tqdm.tqdm(range(test_number), desc="f3"):
-            farray([0, 0, 0])
-        for _ in tqdm.tqdm(range(test_number), desc="f4"):
-            farray([0, 0, 0, 0])
-        for _ in tqdm.tqdm(range(test_number), desc="i2"):
-            iarray([0, 0])
-        for _ in tqdm.tqdm(range(test_number), desc="i3"):
-            iarray([0, 0, 0])
-        for _ in tqdm.tqdm(range(test_number), desc="i4"):
-            iarray([0, 0, 0, 0])
-
-    @staticmethod
-    def property_test():
-        tn = CTreeNode().as_root([0, 0], [50, 50], [1, 1])
-        tn.add([10, 10])
-        p = tn.query([5, 5])
-        print("bound_min:", p.bound_min)
-        print("bound_max:", p.bound_max)
-        print("bound_size:", p.bound_size)
-        print("center", p.center)
-        print("min_length", p.min_length)
-        print("i_bound_min", p.i_bound_min)
-        print("i_bound_max", p.i_bound_max)
-        print("i_bound_size", p.i_bound_size)
-        print("i_center", p.i_center)
-
-    @staticmethod
-    def render2_pathgraph_test():
-        tn = CTreeNode().as_root([0, 0], [50, 50], [1, 1])
-        pg = CPathGraph()
-        tn.add_raycast([0, 0], [25, 49])
-        pg.update(tn)
-        path = pg.get_path(tn.query([0, 0], True), tn.query([50, 50], True))
-        c_path = tn.interpolation_center(path)
-        _, s_path = tn.path_smoothing(c_path)
-        tn.render2(show_now=0, with_graph=pg, with_path=s_path)
-
-    @staticmethod
-    def save_test():
-        tn = CTreeNode().as_root([0, 0], [640, 640], [2, 2])
-        number = 500
-
-        for i in range(number):
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] * cos(pi / 2 * i / number),
-            ]
-            tn.add_raycast([0, 0], p, False)
-        start = perf_counter()
-        tn.save()
-        print(f"save cost {1000*(perf_counter()-start)} ms")
-
-    @staticmethod
-    def serialize_deserialize_test():
-        tn = CTreeNode().as_root([0, 0], [50, 50], [1, 1])
-        number = 50
-        for i in range(number):
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] * cos(pi / 2 * i / number),
-            ]
-            tn.add_raycast([0, 0], p, False)
-        start = perf_counter()
-        obj = tn.serialize()
-        print(f"serialization cost {1000*(perf_counter()-start)} ms")
-
-        start = perf_counter()
-        deserialized = CTreeNode.deserialize(obj)
-        print(f"deserialization cost {1000*(perf_counter()-start)} ms")
-        imshow("Raw", tn.render2())
-        imshow("New", deserialized.render2())
-        waitKey(0)
-
-    @staticmethod
-    def save_load_test():
-        tn = CTreeNode().as_root([0, 0], [50, 50], [1, 1])
-        number = 50
-        for i in range(number):
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] * cos(pi / 2 * i / number),
-            ]
-            tn.add_raycast([0, 0], p, False)
-        start = perf_counter()
-        tn.save()
-        print(f"save cost {1000*(perf_counter()-start)} ms")
-
-        start = perf_counter()
-        loaded = CTreeNode.load()
-        print(f"load cost {1000*(perf_counter()-start)} ms")
-        imshow("Raw", tn.render2())
-        imshow("New", loaded.render2())
-        waitKey(0)
-
-    @staticmethod
-    def ray3d_test():
-        tn = CTreeNode().as_root([0, 0, 0], [50, 50, 50], [1, 1, 1])
-        number = 50
-        for i in range(number):
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] * cos(pi / 2 * i / number),
-                tn.bound_size[2] / 2,
-            ]
-            tn.add_raycast([0, 0, 0], p, False, -1)
-            p = [
-                tn.bound_size[0] * sin(pi / 2 * i / number),
-                tn.bound_size[1] / 2,
-                tn.bound_size[2] * cos(pi / 2 * i / number),
-            ]
-            tn.add_raycast([0, 0, 0], p, False, -1)
-            p = [
-                tn.bound_size[0] / 2,
-                tn.bound_size[1] * sin(pi / 2 * i / number),
-                tn.bound_size[2] * cos(pi / 2 * i / number),
-            ]
-            tn.add_raycast([0, 0, 0], p, False, -1)
-        tn.render3(0)
-
-
-if __name__ == "__main__":
-    init_ctree()
-    CTreeNodeTest.render2_pathgraph_test()
