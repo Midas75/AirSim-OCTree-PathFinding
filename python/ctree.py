@@ -4,12 +4,12 @@
 # pylint: disable=C0302  # I'm long
 from __future__ import annotations
 
-import os
+from os.path import dirname
 from typing import Iterator, Literal, Any
 from time import perf_counter
 from functools import cached_property
-import json
-import gzip
+from json import dumps,loads
+from gzip import compress,decompress
 from tqdm import tqdm
 from numpy import ones, ndarray, uint8
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
@@ -37,7 +37,7 @@ def init_ctree(
     if debug:
         set_debug()
     cppdef(f"#define TREE_DIM {C_TREE_DIM}")
-    include(f"{os.path.dirname(__file__)}/../cpp/ctree.hpp")
+    include(f"{dirname(__file__)}/../cpp/ctree.hpp")
     _F_STD_ARRAY = gbl.ctree.F_STD_ARRAY
     _I_STD_ARRAY = gbl.ctree.I_STD_ARRAY
     _TREENODE_STD_VECTOR = gbl.ctree.TREENODE_STD_VECTOR
@@ -291,8 +291,8 @@ class CTreeNode:
         if path is None:
             path = f"{__class__.__name__}.json.gz"
         with open(path, "wb") as f:
-            j = json.dumps(self.serialize())
-            gz = gzip.compress(j.encode("utf-8"))
+            j = dumps(self.serialize())
+            gz = compress(j.encode("utf-8"))
             f.write(gz)
 
     @staticmethod
@@ -325,8 +325,8 @@ class CTreeNode:
         if path is None:
             path = f"{__class__.__name__}.json.gz"
         with open(path, "rb") as f:
-            j = gzip.decompress(f.read()).decode("utf-8")
-            return CTreeNode.deserialize(json.loads(j))
+            j = decompress(f.read()).decode("utf-8")
+            return CTreeNode.deserialize(loads(j))
 
     def as_root(
         self, bound_min: list[float], bound_max: list[float], min_length: list[float]

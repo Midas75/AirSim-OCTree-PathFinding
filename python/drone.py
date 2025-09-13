@@ -1,6 +1,5 @@
 from __future__ import annotations
-import typing
-import time
+from time import sleep
 from asyncio import to_thread
 from threading import Event
 from numpy import (
@@ -8,7 +7,6 @@ from numpy import (
     array,
     dtype,
     ndarray,
-    concatenate,
     float16,
     dot,
     clip,
@@ -18,11 +16,8 @@ from numpy import (
     degrees,
 )
 from numpy.linalg import norm
-from open3d import geometry, utility, visualization
 from fusion_detection import getPointCloudPoints
-import drone_request
 from projectairsim import ProjectAirSimClient, Drone, World
-from tqdm import tqdm
 from airsim import MultirotorClient, YawMode
 from drone_request import DroneRequestClient
 
@@ -75,6 +70,102 @@ class IDrone:
         pass
 
 
+class AirSimDrone(IDrone):
+    ac: MultirotorClient
+    drone_id: int
+    lidar_name: str
+
+    def __init__(
+        self,
+        drone_id: int = 1,
+        lidar_name: str = "lidar1",
+        airsim_address: str = "127.0.0.1",
+        airsim_port: int = 41451,
+    ):
+        self.drone_id = drone_id
+        self.lidar_name = lidar_name
+        self.ac = MultirotorClient(ip=airsim_address, port=airsim_port)
+        self.ac.confirmConnection()
+        self.ac.reset()
+        self.ac.enableApiControl(True, vehicle_name=str(self.drone_id))
+        self.ac.armDisarm(True, vehicle_name=str(self.drone_id))
+
+    def get_ground_truth_pose(self) -> tuple[array, array]:
+        gtk = self.ac.simGetGroundTruthKinematics(str(self.drone_id))
+        ori = gtk.orientation
+        return array(gtk.position.to_numpy_array(), dtype=float16), array(
+            [ori.w_val, ori.x_val, ori.y_val, ori.z_val], dtype=float16
+        )
+
+    def get_pose(self, ground_truth: bool = True) -> tuple[ndarray, ndarray]:
+        if ground_truth:
+            return self.get_ground_truth_pose()
+        return self.get_ground_truth_pose()
+
+    def get_lidar_data(self, ensure_new=True, relative=False) -> ndarray:
+        ld = self.ac.getLidarData(self.lidar_name, str(self.drone_id))
+        if ensure_new:
+            while len(ld.point_cloud) < 3:
+                sleep(0.05)
+                ld = self.ac.getLidarData("lidar_1", str(self.drone_id))
+        points = array(ld.point_cloud, dtype=float16)
+        points = points.reshape((int(points.shape[0] / 3), 3), copy=False)
+        if relative:
+            return points
+        pos = ld.pose.position.to_numpy_array()
+        q = [
+            ld.pose.orientation.w_val,
+            ld.pose.orientation.x_val,
+            ld.pose.orientation.y_val,
+            ld.pose.orientation.z_val,
+        ]
+        points = self.rotate_vectors(q, points)
+        return points + pos
+
+    async def move_by_velocity(
+        self,
+        v_north: float = 1.0,
+        v_east: float = 0.0,
+        v_down: float = 0.0,
+        duration: float = 0,
+        face_to_forward=True,
+        up_vector=array([0, 0, 1], dtype=float16),
+        yaw_ratio=0.5,
+    ):
+        if face_to_forward:
+            _, q = self.get_pose()
+            forward_vec = self.rotate_vectors(q)
+            forward_vec[2] = 0
+            v_vec = array([v_north, v_east, 0], dtype=float16)
+            norm_f = norm(forward_vec)
+            norm_v = norm(v_vec)
+            if isnan(norm_v) or norm_v < 1e-4:
+                theta = 0
+            else:
+                dot_fv = dot(forward_vec, v_vec)
+                cos_theta = dot_fv / norm_f / norm_v
+                cos_theta = clip(cos_theta, -1, 1)
+                theta = float(arccos(cos_theta))
+                if dot(cross(forward_vec, v_vec), up_vector) < 0:
+                    theta = -theta
+                theta *= yaw_ratio
+        else:
+            theta = 0
+        await to_thread(
+            self.ac.moveByVelocityAsync(
+                vx=v_north,
+                vy=v_east,
+                vz=v_down,
+                duration=duration,
+                yaw_mode=YawMode(True, yaw_or_rate=degrees(theta)),
+                vehicle_name=str(self.drone_id),
+            ).join
+        )
+
+    def close(self):
+        self.ac.client.close()
+
+
 class AdvancedAirSimDrone(IDrone):
     ac: MultirotorClient
     dr: DroneRequestClient
@@ -105,6 +196,7 @@ class AdvancedAirSimDrone(IDrone):
     def get_pose(self, ground_truth: bool = True) -> tuple[ndarray, ndarray]:
         if ground_truth:
             return self.get_ground_truth_pose()
+        return self.get_ground_truth_pose()
 
     def get_lidar_data(
         self, ensure_new: bool = True, relative: bool = False
@@ -229,6 +321,7 @@ class ProjectAirSimDrone(IDrone):
     def get_pose(self, ground_truth: bool = True) -> tuple[ndarray, ndarray]:
         if ground_truth:
             return self.get_ground_truth_pose()
+        return self.get_ground_truth_pose()
 
     def process_lidar_data(self, lidar_data: dict):
         if lidar_data:

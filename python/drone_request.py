@@ -1,10 +1,19 @@
 from __future__ import annotations
-import socket
-import numpy
-import cv2
-import json
-import typing
-import struct
+from socket import socket, AF_INET, SOCK_STREAM
+from json import loads
+from typing import Any
+from struct import unpack
+from numpy import ones, uint8, ndarray, frombuffer
+from cv2 import (  # pylint: disable=no-name-in-module
+    putText,
+    FONT_HERSHEY_SIMPLEX,
+    imshow,
+    waitKey,
+    imdecode,
+    IMREAD_COLOR,
+    rectangle,
+    addWeighted,
+)
 
 
 class Annotation:
@@ -16,7 +25,7 @@ class Annotation:
 
     def __init__(
         self,
-        annotationDict: dict[str, typing.Any] = {},
+        annotationDict: dict[str, Any] = {},
         xyxy: list[float] = [],
         name: str = "",
         visible: bool = True,
@@ -40,7 +49,7 @@ class DebugData:
     forward: tuple[float, float, float]
 
     def __init__(self, data: bytes) -> None:
-        self.forward = struct.unpack(">3f", data[0:12])
+        self.forward = unpack(">3f", data[0:12])
 
 
 class Attitude:
@@ -55,13 +64,11 @@ class Attitude:
 
     def __init__(
         self,
-        data: typing.Union[
-            tuple[float, float, float, float, float, float, float, float], bytes
-        ],
+        data: tuple[float, float, float, float, float, float, float, float] | bytes,
     ) -> None:
         if isinstance(data, ((bytes, bytearray), bytearray)):
             self.x, self.y, self.z, self.rx, self.ry, self.rz, self.rw, self.fov = (
-                struct.unpack(">8f", data)
+                unpack(">8f", data)
             )
         else:
             self.x = data[0]
@@ -85,9 +92,7 @@ class Depth:
     row: int
     depths: list[list[float]]
 
-    def __init__(
-        self, data: typing.Union[bytes, tuple[int, int, list[list[float]]]]
-    ) -> None:
+    def __init__(self, data: bytes | tuple[int, int, list[list[float]]]) -> None:
         if isinstance(data, (bytes, bytearray)):
             self.row = int.from_bytes(data[0:4], "big")
             self.col = int.from_bytes(data[4:8], "big")
@@ -95,7 +100,7 @@ class Depth:
             for i in range(self.row):
                 self.depths.append(
                     list(
-                        struct.unpack(
+                        unpack(
                             f">{self.col}f",
                             data[8 + i * self.col * 4 : 8 + (i + 1) * self.col * 4],
                         )
@@ -107,38 +112,36 @@ class Depth:
             self.depths = data[2]
 
     def show(self, ratio: int = 60) -> None:
-        img = numpy.ones((self.col * ratio, self.row * ratio, 3), numpy.uint8) * 255
+        img = ones((self.col * ratio, self.row * ratio, 3), uint8) * 255
         for i in range(self.col):
             for j in range(self.row):
-                cv2.putText(
+                putText(
                     img,
                     f"{self.depths[j][i]:.2f}",
                     (i * ratio + ratio // 2, self.col * ratio - j * ratio - ratio // 4),
-                    cv2.FONT_HERSHEY_SIMPLEX,
+                    FONT_HERSHEY_SIMPLEX,
                     0.4,
                     (128, 0, 0),
                     1,
                 )
-        cv2.imshow("depth", img)
-        cv2.waitKey(1)
+        imshow("depth", img)
+        waitKey(1)
 
 
 class Image:
-    rawBytes: typing.Union[bytearray, bytes]
-    image: numpy.ndarray
+    rawBytes: bytearray | bytes
+    image: ndarray
     annotations: list[Annotation]
 
-    def __init__(
-        self, data: typing.Union[bytes, Image], postProcess: bool = False
-    ) -> None:
+    def __init__(self, data: bytes | Image, postProcess: bool = False) -> None:
         if isinstance(data, Image):
             self.rawBytes = data.rawBytes.copy()
             self.image = data.image.copy()
             self.annotations = data.annotations.copy()
         elif isinstance(data, (bytes, bytearray)):
             self.rawBytes = data
-            n = numpy.frombuffer(data, dtype=numpy.uint8)
-            self.image = cv2.imdecode(n, cv2.IMREAD_COLOR)
+            n = frombuffer(data, dtype=uint8)
+            self.image = imdecode(n, IMREAD_COLOR)
             if postProcess:
                 self.image = self.image[::-1, :, :]
                 self.image = self.image.copy()
@@ -148,19 +151,19 @@ class Image:
             self.annotations = []
             rects, l = self._reverseParseJson(data)
             if l != -1:
-                rects = json.loads(rects)
+                rects = loads(rects)
                 for item in rects:
                     self.annotations.append(Annotation(item))
         else:
             raise TypeError()
 
     def _reverseParseJson(self, data: bytes) -> tuple[bytes, int]:
-        pos = data.find(b"\xFF\xD9")
+        pos = data.find(b"\xff\xd9")
         if pos == len(data) - 2:
             return [], -1
         return data[pos + 2 :], pos
 
-    def _gammaCorrect(self, image: numpy.ndarray, gamma: float = 2.2) -> numpy.ndarray:
+    def _gammaCorrect(self, image: ndarray, gamma: float = 2.2) -> ndarray:
         return (((image / 255) ** (1 / gamma)) * 255).astype("uint8")
 
     def show(
@@ -170,7 +173,7 @@ class Image:
         if withAnnotation:
             for ann in self.annotations:
                 if ann.visible:
-                    cv2.rectangle(
+                    rectangle(
                         show_image,
                         (
                             int(ann.xyxy[0] * show_image.shape[1]),
@@ -183,27 +186,27 @@ class Image:
                         (0, 255, 0),
                         1,
                     )
-                    cv2.putText(
+                    putText(
                         show_image,
                         f"{ann.name} {ann.distance:.2f}",
                         (
                             int(ann.xyxy[0] * show_image.shape[1]),
                             int(ann.xyxy[1] * show_image.shape[0] + 15),
                         ),
-                        cv2.FONT_HERSHEY_SIMPLEX,
+                        FONT_HERSHEY_SIMPLEX,
                         0.5,
                         (0, 255, 0),
                         1,
                     )
         if depths != None:
             block = (
-                numpy.ones(
+                ones(
                     (
                         int(show_image.shape[0] / depths.row),
                         int(show_image.shape[1] / depths.col),
                         3,
                     ),
-                    numpy.uint8,
+                    uint8,
                 )
                 * 255
             )
@@ -214,7 +217,7 @@ class Image:
                     t = int(j / depths.row * show_image.shape[0]) + 1
                     b = int((j + 1) / depths.row * show_image.shape[0]) - 1
                     alpha = depths.depths[depths.row - j - 1][i] / 100
-                    new_block = cv2.addWeighted(
+                    new_block = addWeighted(
                         show_image[t:b, l:r],
                         1 - alpha,
                         block[: b - t, : r - l],
@@ -222,17 +225,17 @@ class Image:
                         0,
                     )
                     show_image[t:b, l:r] = new_block
-        cv2.imshow(title, show_image)
-        cv2.waitKey(1)
+        imshow(title, show_image)
+        waitKey(1)
 
 
 class DroneRequestClient:
-    _client: socket.socket
+    _client: socket
     _cacheId: int = -1
     _cacheIdBytes: bytes
 
     def __init__(self, address: tuple[str, int] = ("127.0.0.1", 8811)) -> None:
-        self._client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        self._client = socket(AF_INET, SOCK_STREAM)
         self._client.connect(address)
 
     def _prependLength(self, data: bytes) -> bytes:

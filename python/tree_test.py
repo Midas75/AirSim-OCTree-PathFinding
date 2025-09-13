@@ -1,15 +1,14 @@
 from math import cos, sin, pi
-import time
+from time import perf_counter
 
-import random
+from random import random
 from cv2 import imshow, waitKey, line  # pylint: disable=no-name-in-module
 from tree import TreeNode, PathNode, PathGraph
-
+from tree_utils import VisWindow3
 
 c = 1
 if c:
     from ctree import CTreeNode, CPathGraph, init_ctree
-
     tn_cls = CTreeNode
     pg_cls = CPathGraph
     init_ctree()
@@ -17,7 +16,6 @@ else:
     tn_cls = TreeNode
     pg_cls = PathGraph
 
-from tree_utils import VisWindow3
 
 
 class TreeTest:
@@ -48,7 +46,7 @@ class TreeTest:
         tn.as_root([0, 0], [50, 50], [4, 1])
         for _ in range(10):
             tn.add(
-                [random.random() * tn.bound_size[0], random.random() * tn.bound_size[1]]
+                [random() * tn.bound_size[0], random() * tn.bound_size[1]]
             )
         tn.render2(show_now=0)
 
@@ -62,9 +60,9 @@ class TreeTest:
                 tn.bound_size[0] * sin(pi / 2 * i / number),
                 tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
-            start = time.perf_counter()
+            start = perf_counter()
             tn.add_raycast([0, 0], p, False)
-            print(f"add_raycast cost {1000*(time.perf_counter()-start)} ms")
+            print(f"add_raycast cost {1000*(perf_counter()-start)} ms")
             tn.render2(show_now=0)
 
     @staticmethod
@@ -125,13 +123,13 @@ class TreeTest:
             for _j in range(1000):
                 tn.add(
                     [
-                        random.random() * tn.bound_size[0],
-                        random.random() * tn.bound_size[1],
+                        random() * tn.bound_size[0],
+                        random() * tn.bound_size[1],
                     ]
                 )
-            start = time.perf_counter()
+            start = perf_counter()
             pg.update(tn)
-            print(f"update cost: {(time.perf_counter()-start)*1000:.2f} ms")
+            print(f"update cost: {(perf_counter()-start)*1000:.2f} ms")
             tn.render2(show_now=0, with_graph=pg)
 
     @staticmethod
@@ -143,25 +141,18 @@ class TreeTest:
             for _j in range(100):
                 tn.add(
                     [
-                        1 + random.random() * (tn.bound_size[0] - 1),
-                        1 + random.random() * (tn.bound_size[1] - 1),
+                        1 + random() * (tn.bound_size[0] - 1),
+                        1 + random() * (tn.bound_size[1] - 1),
                     ]
                 )
             pg.update(tn)
-            start = time.perf_counter()
+            start = perf_counter()
             path = pg.get_path(tn.query([0, 0]), tn.query([50, 50]))
-            print(f"get path cost: {(time.perf_counter()-start)*1000:.2f} ms")
+            print(f"get path cost: {(perf_counter()-start)*1000:.2f} ms")
             c_path = tn.interpolation_center(path)
             tn.render2(show_now=0, with_graph=pg, with_path=c_path)
             _, s_path = tn.path_smoothing(c_path, expand=tn.min_length)
             tn.render2(show_now=0, with_graph=pg, with_path=s_path)
-
-    @staticmethod
-    def render3_test():
-        tn = TreeNode().as_root([0, 0, 0], [10, 10, 10], [1, 1, 1])
-        tn.add([0, 0, 0])
-        tn.add_i([3, 3, 3])
-        tn.render3(show_now=0, with_path=[[0, 0, 0], [10, 10, 10]])
 
     @staticmethod
     def octree_test():
@@ -170,22 +161,23 @@ class TreeTest:
         for _i in range(1000):
             tn.add(
                 [
-                    1 + random.random() * (tn.bound_size[0] - 1),
-                    1 + random.random() * (tn.bound_size[1] - 1),
-                    1 + random.random() * (tn.bound_size[1] - 1),
+                    1 + random() * (tn.bound_size[0] - 1),
+                    1 + random() * (tn.bound_size[1] - 1),
+                    1 + random() * (tn.bound_size[1] - 1),
                 ]
             )
-        start = time.perf_counter()
+        start = perf_counter()
         pg.update(tn)
         path = pg.get_path(tn.query([0, 0, 0]), tn.query([10, 10, 10]))
-        r_path = [pn.tree_node.center for pn in path]
+        r_path = [pn.center for pn in path]
         c_path = tn.interpolation_center(path)
         _, s_path = tn.path_smoothing(c_path, expand=tn.min_length)
-        print(f"update&path cost {1000*(time.perf_counter()-start):.2f} ms")
+        print(f"update&path cost {1000*(perf_counter()-start):.2f} ms")
         print(r_path)
         print(c_path)
         print(s_path)
-        tn.render3(show_now=0, with_path=r_path)
+        VisWindow3().update(tree_node=tn,path=r_path)
+        input("enter to exit")
 
     @staticmethod
     def serialize_deserialize_test():
@@ -197,13 +189,13 @@ class TreeTest:
                 tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
             tn.add_raycast([0, 0], p, False)
-        start = time.perf_counter()
+        start = perf_counter()
         obj = tn.serialize()
-        print(f"serialization cost {1000*(time.perf_counter()-start)} ms")
+        print(f"serialization cost {1000*(perf_counter()-start)} ms")
 
-        start = time.perf_counter()
+        start = perf_counter()
         deserialized = TreeNode.deserialize(obj)
-        print(f"deserialization cost {1000*(time.perf_counter()-start)} ms")
+        print(f"deserialization cost {1000*(perf_counter()-start)} ms")
         imshow("Raw", tn.render2())
         imshow("New", deserialized.render2())
         waitKey(0)
@@ -218,15 +210,15 @@ class TreeTest:
                 tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
             tn.add_raycast([0, 0], p, False)
-        start = time.perf_counter()
+        start = perf_counter()
         tn.save()
-        print(f"save cost {1000*(time.perf_counter()-start)} ms")
+        print(f"save cost {1000*(perf_counter()-start)} ms")
 
-        start = time.perf_counter()
+        start = perf_counter()
         loaded = tn_cls.load()
         pg = pg_cls()
         pg.update(loaded)
-        print(f"load cost {1000*(time.perf_counter()-start)} ms")
+        print(f"load cost {1000*(perf_counter()-start)} ms")
         imshow("Raw", tn.render2())
         imshow("New", loaded.render2(with_graph=pg))
         waitKey(0)
@@ -262,24 +254,24 @@ class TreeTest:
     def raycast_benchmark_test():
         tn = tn_cls().as_root([0, 0], [640, 640], [2, 2])
         number = 500
-        start = time.perf_counter()
+        start = perf_counter()
         for i in range(number):
             p = [
                 tn.bound_size[0] * sin(pi / 2 * i / number),
                 tn.bound_size[1] * cos(pi / 2 * i / number),
             ]
             tn.add_raycast([0, 0], p, False)
-        print(f"add_raycast {number} times cost {1000*(time.perf_counter()-start)} ms")
+        print(f"add_raycast {number} times cost {1000*(perf_counter()-start)} ms")
 
     @staticmethod
     def lca_test():
         tn = tn_cls().as_root([0, 0], [20, 20], [1, 1])
         number = 30
         o_number = 10
-        start = time.perf_counter()
+        start = perf_counter()
         for i in range(o_number):
             tn.add(
-                [random.random() * tn.bound_size[0], random.random() * tn.bound_size[1]]
+                [random() * tn.bound_size[0], random() * tn.bound_size[1]]
             )
         im = tn.render2()
         for i in range(number):
@@ -298,7 +290,7 @@ class TreeTest:
                 (0, 0, 255) if cross else (0, 255, 0),
                 1,
             )
-        print(f"lca_test cost {1000*(time.perf_counter()-start)} ms")
+        print(f"lca_test cost {1000*(perf_counter()-start)} ms")
         imshow("lca_test", im)
         waitKey(0)
 
@@ -377,8 +369,7 @@ if __name__ == "__main__":
     # tt.graph_test()
     # tt.graph_update_test()
     # tt.get_path_test()
-    # tt.render3_test()
-    # tt.octree_test()
+    tt.octree_test()
     # tt.serialize_deserialize_test()
     # tt.save_load_test()
     # tt.dynamic_culling_test()
@@ -386,4 +377,4 @@ if __name__ == "__main__":
     # tt.lca_test()
     # tt.get_path3_test()
     # tt.update_path_test()
-    tt.cross_expand3_test()
+    # tt.cross_expand3_test()

@@ -10,10 +10,9 @@ import heapq
 import json
 import gzip
 
-from numpy import ndarray, uint8, ones, array
+from numpy import ndarray, uint8, ones
 
 from cv2 import rectangle, line, imshow, waitKey  # pylint: disable=no-name-in-module
-from open3d import geometry, utility, visualization
 from tqdm import tqdm
 
 

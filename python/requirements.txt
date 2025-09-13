@@ -1,0 +1,6 @@
+tornado==4.5.3
+airsim
+open3d
+opencv_python
+tqdm
+git+https://github.com/Midas75/ProjectAirSim.git#subdirectory=client/python/projectairsim

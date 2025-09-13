@@ -1,6 +1,5 @@
-import drone_request
-import math
-import typing
+from math import tan, radians, sqrt
+from drone_request import Image, Depth, Attitude
 
 
 def rotateWithQuaternion(
@@ -41,7 +40,7 @@ def rotateWithQuaternion(
 
 
 def getForward(
-    quaternion: tuple[float, float, float, float]
+    quaternion: tuple[float, float, float, float],
 ) -> tuple[float, float, float]:
     return rotateWithQuaternion(quaternion)
 
@@ -49,22 +48,24 @@ def getForward(
 def getV3Distance(
     a: tuple[float, float, float], b: tuple[float, float, float] = (0, 0, 0)
 ) -> float:
-    return math.sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2)
+    return sqrt((b[0] - a[0]) ** 2 + (b[1] - a[1]) ** 2 + (b[2] - a[2]) ** 2)
+
 
 def distance(v: tuple[float, float, float]) -> float:
-    return math.sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
+    return sqrt(v[0] ** 2 + v[1] ** 2 + v[2] ** 2)
 
 
 def normalize(
-    v: typing.Union[tuple[float, float, float], list[float]]
+    v: tuple[float, float, float] | list[float],
 ) -> tuple[float, float, float]:
     norm = distance(v)
     if norm == 0:
         return v
     return (v[0] / norm, v[1] / norm, v[2] / norm)
 
+
 def getRegionColor(
-    image: drone_request.Image, position: tuple[float, float], regionSize: int = 10
+    image: Image, position: tuple[float, float], regionSize: int = 10
 ) -> tuple[float, float, float]:
     x, y = int(position[0] * image.image.shape[1]), int(
         position[1] * image.image.shape[0]
@@ -77,18 +78,19 @@ def getRegionColor(
     # bgr -> rgb
     return (avgColor[2], avgColor[1], avgColor[0])
 
+
 def getPointCloudPoints(
-    depth: drone_request.Depth,
-    attitude: drone_request.Attitude,
-    image: drone_request.Image = None,
+    depth: Depth,
+    attitude: Attitude,
+    image: Image = None,
     depthThreshold: float = 100,
     whRatio: float = 1280 / 768,
-) -> tuple[list[tuple[float, float, float,bool]], list[tuple[float, float, float]]]:
+) -> tuple[list[tuple[float, float, float, bool]], list[tuple[float, float, float]]]:
     points = []
     colors = []
     q = (attitude.rx, attitude.ry, attitude.rz, attitude.rw)
     p = (attitude.x, attitude.y, attitude.z)
-    fovRatio = 2 * math.tan(math.radians(attitude.fov / 2))
+    fovRatio = 2 * tan(radians(attitude.fov / 2))
     if image is not None:
         whRatio = image.image.shape[1] / image.image.shape[0]
     for r in range(depth.row):
@@ -110,7 +112,7 @@ def getPointCloudPoints(
                 p[0] + targetDirection[0] * depthValue,
                 p[1] + targetDirection[1] * depthValue,
                 p[2] + targetDirection[2] * depthValue,
-                empty
+                empty,
             )
             points.append(pointPosition)
             if image is not None:

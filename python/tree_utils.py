@@ -1,7 +1,6 @@
 from multiprocessing import Process, Queue
 from traceback import print_exc
 from time import perf_counter, sleep
-from numpy import asarray
 from open3d import visualization, geometry, utility
 
 from tree import TreeNode, PathGraph
@@ -16,6 +15,8 @@ class SerializedData2:
 
 class SerializedData3:
     node: dict[int, list[float]] = None  # [x1,y1,z1,xb,yb,zb]
+    points: list[list[float]] = None  # [x,y,z]
+    add_points: list[list[float]] = None  # [x,y,z]
     graph: list[list[float]] = None  # [x1,y1,z1,x2,y2,z2]
     path: list[list[float]] = None  # [x,y,z]
     bound: list[float] = None  # [x1,y1,z1,x2,y2,z2]
@@ -26,8 +27,10 @@ class SerializedData3:
 
     def update(
         self,
-        tree_node: TreeNode = None,
-        path_graph: PathGraph = None,
+        tree_node: TreeNode | CTreeNode = None,
+        points: list[list[float]] = None,
+        add_points: list[list[float]] = None,
+        path_graph: PathGraph | CPathGraph = None,
         path: list[list[float]] = None,
         bound: bool = True,
         contact_center: bool = False,
@@ -72,9 +75,17 @@ class SerializedData3:
         else:
             self.graph = None
         if path is not None:
-            self.path = path.copy()
+            self.path = path
         else:
             self.path = None
+        if points is not None:
+            self.points = points.copy()
+        else:
+            self.points = None
+        if add_points is not None:
+            self.add_points = add_points.copy()
+        else:
+            self.add_points = None
         self.stop = stop
         return perf_counter() - start
 
@@ -90,6 +101,7 @@ class VisWindow3:
     _process: Process = None
     _update_queue: Queue = None
     _tree_node_geometries: dict[int, geometry.TriangleMesh] = None
+    _pcd_geometry: geometry.PointCloud = None
     _template_box_geometry: geometry.TriangleMesh = None
     _path_graph_geometry: geometry.LineSet = None
     _path_geometry: geometry.LineSet = None
@@ -114,6 +126,8 @@ class VisWindow3:
     def update(
         self,
         tree_node: TreeNode = None,
+        points: list[list[float]] = None,
+        add_points: list[list[float]] = None,
         path_graph: PathGraph = None,
         path: list[list[float]] = None,
         bound: bool = True,
@@ -123,6 +137,8 @@ class VisWindow3:
         self.clip_queue()
         cost = self.sd.update(
             tree_node=tree_node,
+            points=points,
+            add_points=add_points,
             path_graph=path_graph,
             path=path,
             bound=bound,
@@ -142,11 +158,13 @@ class VisWindow3:
         self._visualizer = visualization.Visualizer()
         self._tree_node_geometries = dict[int, geometry.TriangleMesh]()
         merge_node = geometry.TriangleMesh()
+        self._pcd_geometry = geometry.PointCloud()
         self._path_graph_geometry = geometry.LineSet()
         self._path_geometry = geometry.LineSet()
         self._bound_geometry = geometry.AxisAlignedBoundingBox()
         self._visualizer.create_window()
         self._visualizer.add_geometry(merge_node)
+        self._visualizer.add_geometry(self._pcd_geometry)
         first_vis = True
         while self.running:
             try:
@@ -172,7 +190,6 @@ class VisWindow3:
                             box = geometry.TriangleMesh.create_box(
                                 node_bound[3], node_bound[4], node_bound[5]
                             ).translate(node_bound[:3])
-                            # box.compute_vertex_normals()
                             self._tree_node_geometries[node_id] = box
                             if not need_remerge:
                                 merge_node += box
@@ -182,7 +199,13 @@ class VisWindow3:
                             merge_node += box
                     merge_node.compute_vertex_normals()
                     self._visualizer.update_geometry(merge_node)
-                    # self._visualizer.add_geometry(box, False)
+                    if sd.points is not None:
+                        self._pcd_geometry.points = utility.Vector3dVector(sd.points)
+                    if sd.add_points is not None:
+                        self._pcd_geometry.points.extend(
+                            utility.Vector3dVector(sd.add_points)
+                        )
+                    self._visualizer.update_geometry(self._pcd_geometry)
                     if sd.graph is not None and len(sd.graph) > 0:
                         points = list[list[float]]()
                         lines = list[list[int]]()
@@ -200,7 +223,9 @@ class VisWindow3:
                         )
                         self._path_graph_geometry.lines = utility.Vector2iVector(lines)
                         self._path_graph_geometry.paint_uniform_color([0, 1, 0])
-                        self._visualizer.add_geometry(self._path_graph_geometry, first_vis)
+                        self._visualizer.add_geometry(
+                            self._path_graph_geometry, first_vis
+                        )
                     else:
                         self._visualizer.remove_geometry(
                             self._path_graph_geometry, False
@@ -221,13 +246,13 @@ class VisWindow3:
                         self._visualizer.add_geometry(self._bound_geometry, first_vis)
                     else:
                         self._visualizer.remove_geometry(self._bound_geometry, False)
-                    if first_vis:
-                        self._visualizer.reset_view_point(True)
+                    # if first_vis:
+                    #     self._visualizer.reset_view_point(True)
                     first_vis = False
                 sleep(1 / 60)
                 self._visualizer.poll_events()
                 self._visualizer.update_renderer()
-            except:
+            except KeyboardInterrupt as _:
                 self.running = False
                 print_exc()
         # self._visualizer.destroy_window()
